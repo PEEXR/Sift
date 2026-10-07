@@ -15,6 +15,9 @@ interface ScreenshotDao {
     @Query("SELECT * FROM screenshots ORDER BY dateAdded DESC")
     fun getAllScreenshotsFlow(): Flow<List<ScreenshotEntity>>
 
+    @Query("SELECT id, uri, displayName, dateAdded, sizeBytes FROM screenshots ORDER BY dateAdded DESC")
+    fun getLibraryRowsFlow(): Flow<List<LibraryRow>>
+
     @Query("SELECT COUNT(*) FROM screenshots WHERE isProcessed = 0 OR embedding IS NULL")
     fun countNeedingIndexingFlow(): Flow<Int>
 
@@ -62,8 +65,47 @@ interface ScreenshotDao {
     @Query("SELECT * FROM collections ORDER BY name ASC")
     fun getAllCollectionsFlow(): Flow<List<CollectionEntity>>
 
+    @Query("""
+        SELECT
+            c.id,
+            c.name,
+            c.description,
+            c.colorHex,
+            c.autoFill,
+            (SELECT COUNT(*) FROM screenshot_collections sc WHERE sc.collectionId = c.id AND sc.source != 'EXCLUDED') AS memberCount,
+            (SELECT COUNT(*) FROM screenshot_collections sc WHERE sc.collectionId = c.id AND sc.source = 'AUTO') AS reviewCount,
+            COALESCE((
+                SELECT SUM(s.sizeBytes)
+                FROM screenshot_collections sc
+                INNER JOIN screenshots s ON s.id = sc.screenshotId
+                WHERE sc.collectionId = c.id AND sc.source != 'EXCLUDED'
+            ), 0) AS totalBytes
+        FROM collections c
+        ORDER BY c.name ASC
+    """)
+    fun getCollectionSummariesFlow(): Flow<List<CollectionSummaryRow>>
+
+    @Query("""
+        SELECT collectionId, uri FROM (
+            SELECT 
+                sc.collectionId AS collectionId, 
+                s.uri AS uri,
+                ROW_NUMBER() OVER (
+                    PARTITION BY sc.collectionId 
+                    ORDER BY (CASE WHEN sc.source = 'MANUAL' THEN 0 ELSE 1 END) ASC, s.dateAdded DESC
+                ) AS rn
+            FROM screenshot_collections sc
+            INNER JOIN screenshots s ON s.id = sc.screenshotId
+            WHERE sc.source != 'EXCLUDED'
+        ) WHERE rn <= 3
+    """)
+    fun getCollectionPreviewsFlow(): Flow<List<CollectionPreviewRow>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCollection(collection: CollectionEntity)
+
+    @Query("UPDATE collections SET description = :description WHERE id = :id")
+    suspend fun updateCollectionDescription(id: String, description: String)
 
     @Query("DELETE FROM collections WHERE id = :id")
     suspend fun deleteCollection(id: String)
@@ -97,6 +139,22 @@ interface ScreenshotDao {
     suspend fun upsertMembership(row: ScreenshotCollectionCrossRef)
 
     @Query("""
+        SELECT sc.screenshotId AS screenshotId, c.name AS name
+        FROM screenshot_collections sc
+        INNER JOIN collections c ON c.id = sc.collectionId
+        WHERE sc.source != 'EXCLUDED'
+    """)
+    fun getAllMembershipNamesFlow(): Flow<List<MembershipNameRow>>
+
+    @Query("""
+        SELECT sc.screenshotId AS screenshotId, c.name AS name
+        FROM screenshot_collections sc
+        INNER JOIN collections c ON c.id = sc.collectionId
+        WHERE sc.source != 'EXCLUDED' AND sc.screenshotId IN (:ids)
+    """)
+    suspend fun getMembershipNamesForScreenshots(ids: List<Long>): List<MembershipNameRow>
+
+    @Query("""
         SELECT c.* FROM collections c
         INNER JOIN screenshot_collections sc ON c.id = sc.collectionId
         WHERE sc.screenshotId = :screenshotId AND sc.source != 'EXCLUDED'
@@ -110,6 +168,15 @@ interface ScreenshotDao {
         ORDER BY s.dateAdded DESC
     """)
     fun getScreenshotsForCollectionFlow(collectionId: String): Flow<List<ScreenshotEntity>>
+
+    @Query("""
+        SELECT s.id, s.uri, s.displayName, s.dateAdded, s.sizeBytes, sc.source
+        FROM screenshots s
+        INNER JOIN screenshot_collections sc ON s.id = sc.screenshotId
+        WHERE sc.collectionId = :collectionId AND sc.source != 'EXCLUDED'
+        ORDER BY s.dateAdded DESC
+    """)
+    fun getCollectionMembersFlow(collectionId: String): Flow<List<CollectionMemberItemRow>>
 
     @Query("""
         SELECT s.*, sc.source AS membershipSource, sc.score AS membershipScore

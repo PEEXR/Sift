@@ -63,6 +63,11 @@ class ScreenshotRepositoryTest {
         mockEmbeddingEngine = mock(EmbeddingEngine::class.java)
 
         `when`(mockDatabase.screenshotDao()).thenReturn(mockDao)
+        `when`(mockDao.getLibraryRowsFlow()).thenReturn(kotlinx.coroutines.flow.emptyFlow())
+        `when`(mockDao.getAllMembershipNamesFlow()).thenReturn(kotlinx.coroutines.flow.emptyFlow())
+        `when`(mockDao.getAllScreenshotsFlow()).thenReturn(kotlinx.coroutines.flow.emptyFlow())
+        `when`(mockDao.getCollectionSummariesFlow()).thenReturn(kotlinx.coroutines.flow.emptyFlow())
+        `when`(mockDao.getCollectionPreviewsFlow()).thenReturn(kotlinx.coroutines.flow.emptyFlow())
         // ScreenshotRepository reads context.contentResolver in its initializer
         `when`(mockContext.contentResolver).thenReturn(mock(android.content.ContentResolver::class.java))
     }
@@ -375,6 +380,18 @@ class ScreenshotRepositoryTest {
             .filter { it.method.name == "replaceAutoMembers" }
         assertEquals(1, replaceCalls.size)
         assertEquals("col_memes", replaceCalls.single().arguments[0])
+    }
+
+    @Test
+    fun updateCollectionDescription_updatesDaoAndRefreshesCollection() = runBlocking {
+        val repo = createRepository()
+
+        `when`(mockModelStore.state).thenReturn(kotlinx.coroutines.flow.MutableStateFlow(ModelState.NotInstalled))
+        `when`(mockModelStore.isInstalled()).thenReturn(false)
+
+        repo.updateCollectionDescription("col_test", "new description")
+
+        verify(mockDao).updateCollectionDescription("col_test", "new description")
     }
 }
 

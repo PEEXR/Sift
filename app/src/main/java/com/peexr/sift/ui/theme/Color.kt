@@ -67,6 +67,26 @@ val CollectionPalette: List<Pair<Color, Color>> = listOf(
     Pair(Color(0xFFC9F2DE), Color(0xFF00311F))  // mint
 )
 
+val CollectionPaletteHex: List<String> = listOf(
+    "#FFD8EC", // pink
+    "#E5D8FF", // lilac
+    "#CFE5FF", // sky
+    "#E4F7B5", // lime
+    "#FFDCC8", // peach
+    "#C9F2DE"  // mint
+)
+
+fun collectionColors(colorHex: String): Pair<Color, Color> {
+    val trimmed = colorHex.trim()
+    val normalized = if (trimmed.startsWith("#")) trimmed else "#$trimmed"
+    val index = CollectionPaletteHex.indexOfFirst { it.equals(normalized, ignoreCase = true) }
+    return if (index >= 0) {
+        CollectionPalette[index]
+    } else {
+        CollectionPalette.first()
+    }
+}
+
 @Immutable
 data class SiftExtendedColors(
     val displayInk: Color,

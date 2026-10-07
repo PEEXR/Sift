@@ -145,3 +145,41 @@ data class CollectionMemberRow(
     val membershipSource: String,
     val membershipScore: Float?
 )
+
+data class LibraryRow(
+    val id: Long,
+    val uri: String,
+    val displayName: String,
+    val dateAdded: Long,
+    val sizeBytes: Long
+)
+
+data class MembershipNameRow(
+    val screenshotId: Long,
+    val name: String
+)
+
+data class CollectionSummaryRow(
+    val id: String,
+    val name: String,
+    val description: String,
+    val colorHex: String,
+    val autoFill: Boolean,
+    val memberCount: Int,
+    val reviewCount: Int,
+    val totalBytes: Long
+)
+
+data class CollectionPreviewRow(
+    val collectionId: String,
+    val uri: String
+)
+
+data class CollectionMemberItemRow(
+    val id: Long,
+    val uri: String,
+    val displayName: String,
+    val dateAdded: Long,
+    val sizeBytes: Long,
+    val source: String
+)

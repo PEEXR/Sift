@@ -26,7 +26,6 @@ import com.peexr.sift.data.local.SettingsManager
 import com.peexr.sift.ui.cleanup.CleanupScreen
 import com.peexr.sift.ui.cleanup.CleanupViewModel
 import com.peexr.sift.ui.collections.CollectionsListScreen
-import com.peexr.sift.ui.collections.CollectionsScreen
 import com.peexr.sift.ui.collections.CollectionsViewModel
 import com.peexr.sift.ui.library.LibraryRoute
 import com.peexr.sift.ui.library.LibraryViewModel

@@ -20,6 +20,8 @@ import com.peexr.sift.data.local.CollectionMemberRow
 import com.peexr.sift.data.local.MembershipSource
 import com.peexr.sift.data.local.ScreenshotCollectionCrossRef
 import com.peexr.sift.data.local.ScreenshotEntity
+import com.peexr.sift.data.model.CollectionMemberItem
+import com.peexr.sift.data.model.CollectionSummary
 import com.peexr.sift.data.model.JevQuestion
 import com.peexr.sift.data.model.JevRequest
 import com.peexr.sift.data.model.ScreenshotItem
@@ -31,7 +33,10 @@ import com.peexr.sift.data.search.topKBySimilarity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -68,13 +73,52 @@ class ScreenshotRepository(
         return vector
     }
 
-    // Flow of all screenshots
-    val allScreenshotsFlow: Flow<List<ScreenshotItem>> = dao.getAllScreenshotsFlow().map { entities ->
-        entities.map { it.toDomainModel() }
-    }
+    // Lightweight flow of library screenshot items (no collections, no OCR)
+    val libraryItemsFlow: Flow<List<ScreenshotItem>> = dao.getLibraryRowsFlow().map { rows ->
+        rows.map { row ->
+            ScreenshotItem(
+                id = row.id,
+                uri = row.uri,
+                displayName = row.displayName,
+                dateAdded = row.dateAdded,
+                sizeBytes = row.sizeBytes
+            )
+        }
+    }.distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    // Flow of all screenshots with collection names combined in one pass
+    val allScreenshotsFlow: Flow<List<ScreenshotItem>> = combine(
+        dao.getAllScreenshotsFlow(),
+        dao.getAllMembershipNamesFlow()
+    ) { entities, membershipRows ->
+        val namesByScreenshot = membershipRows.groupBy({ it.screenshotId }, { it.name })
+        entities.map { entity ->
+            entity.toDomainModel(namesByScreenshot[entity.id] ?: emptyList())
+        }
+    }.flowOn(Dispatchers.Default)
 
     // Flow of user collections
     val allCollectionsFlow: Flow<List<CollectionEntity>> = dao.getAllCollectionsFlow()
+
+    // Flow of collection summaries with up to 3 preview URIs
+    val collectionSummariesFlow: Flow<List<CollectionSummary>> = combine(
+        dao.getCollectionSummariesFlow(),
+        dao.getCollectionPreviewsFlow()
+    ) { summaryRows, previewRows ->
+        val previewsByCollection = previewRows.groupBy({ it.collectionId }, { it.uri })
+        summaryRows.map { row ->
+            CollectionSummary(
+                id = row.id,
+                name = row.name,
+                description = row.description,
+                colorHex = row.colorHex,
+                memberCount = row.memberCount,
+                reviewCount = row.reviewCount,
+                totalBytes = row.totalBytes,
+                previewUris = previewsByCollection[row.id]?.take(3) ?: emptyList()
+            )
+        }
+    }.flowOn(Dispatchers.Default)
 
     // Flow of junk screenshots for Cleanup tab
     val junkScreenshotsFlow: Flow<List<ScreenshotItem>> = dao.getJunkScreenshotsFlow().map { entities ->
@@ -398,6 +442,32 @@ class ScreenshotRepository(
         dao.deleteCollection(id)
     }
 
+    fun collectionMembersFlow(collectionId: String): Flow<List<CollectionMemberItem>> =
+        dao.getCollectionMembersFlow(collectionId).map { rows ->
+            rows.map { row ->
+                CollectionMemberItem(
+                    item = ScreenshotItem(
+                        id = row.id,
+                        uri = row.uri,
+                        displayName = row.displayName,
+                        dateAdded = row.dateAdded,
+                        sizeBytes = row.sizeBytes
+                    ),
+                    kept = row.source == MembershipSource.MANUAL
+                )
+            }
+        }.flowOn(Dispatchers.Default)
+
+    fun collectionFlow(collectionId: String): Flow<CollectionSummary?> =
+        collectionSummariesFlow.map { summaries ->
+            summaries.firstOrNull { it.id == collectionId }
+        }.distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    suspend fun updateCollectionDescription(id: String, description: String) = withContext(Dispatchers.IO) {
+        dao.updateCollectionDescription(id, description)
+        refreshAutoCollections(onlyCollectionId = id)
+    }
+
     fun createDeletePendingIntent(uris: List<Uri>): PendingIntent? {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             MediaStore.createDeleteRequest(contentResolver, uris)
@@ -494,8 +564,7 @@ class ScreenshotRepository(
         fusedIds.mapNotNull { id -> entityMap[id] }
     }
 
-    private suspend fun ScreenshotEntity.toDomainModel(): ScreenshotItem {
-        val collections = dao.getCollectionsForScreenshot(id).map { it.name }
+    private fun ScreenshotEntity.toDomainModel(collections: List<String> = emptyList()): ScreenshotItem {
         return ScreenshotItem(
             id = id,
             uri = uri,
@@ -513,7 +582,15 @@ class ScreenshotRepository(
     }
 
     suspend fun mapToDomainModel(entities: List<ScreenshotEntity>): List<ScreenshotItem> = withContext(Dispatchers.IO) {
-        entities.map { it.toDomainModel() }
+        if (entities.isEmpty()) return@withContext emptyList()
+        val ids = entities.map { it.id }
+        val membershipRows = ids.chunked(500).flatMap { chunk ->
+            dao.getMembershipNamesForScreenshots(chunk)
+        }
+        val namesByScreenshot = membershipRows.groupBy({ it.screenshotId }, { it.name })
+        entities.map { entity ->
+            entity.toDomainModel(namesByScreenshot[entity.id] ?: emptyList())
+        }
     }
 }
 

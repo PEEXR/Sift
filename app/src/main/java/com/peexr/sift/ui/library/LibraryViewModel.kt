@@ -13,6 +13,7 @@ import com.peexr.sift.data.embedding.ModelState
 import com.peexr.sift.data.model.ScreenshotItem
 import com.peexr.sift.data.repository.ScreenshotRepository
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.Flow
@@ -22,8 +23,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -252,11 +256,16 @@ class LibraryViewModel(
         )
     }
 
-    private val screenshotsCombined = combine(
-        repository.allScreenshotsFlow,
+    private val sectionsFlow: Flow<List<LibrarySection>> = repository.libraryItemsFlow
+        .map { groupByDate(it, ZonedDateTime.now()) }
+        .flowOn(Dispatchers.Default)
+        .distinctUntilChanged()
+
+    private val libraryDataFlow = combine(
+        sectionsFlow,
         repository.countAllFlow
-    ) { allScreenshots, totalCount ->
-        Pair(allScreenshots, totalCount)
+    ) { sections, totalCount ->
+        Pair(sections, totalCount)
     }
 
     private val searchCombined = combine(_query, searchStateFlow) { q, searchState ->
@@ -268,14 +277,14 @@ class LibraryViewModel(
     }
 
     val uiState: StateFlow<LibraryUiState> = combine(
-        screenshotsCombined,
+        libraryDataFlow,
         searchCombined,
         indexingUiFlow,
         refreshAndStatusFlow
-    ) { (allScreenshots, totalCount), (queryText, searchState), indexingUi, (isRefreshing, statusMsg) ->
+    ) { (sections, totalCount), (queryText, searchState), indexingUi, (isRefreshing, statusMsg) ->
         LibraryUiState(
             totalCount = totalCount,
-            sections = groupByDate(allScreenshots, ZonedDateTime.now()),
+            sections = sections,
             query = queryText,
             searchResults = searchState.results,
             isSearching = searchState.isSearching,
