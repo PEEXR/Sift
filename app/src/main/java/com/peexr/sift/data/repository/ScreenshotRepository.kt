@@ -10,11 +10,14 @@ import android.provider.MediaStore
 import android.util.Log
 import com.peexr.sift.SiftApplication
 import com.peexr.sift.data.api.JevApiClient
+import com.peexr.sift.data.collections.CollectionMatcher
 import com.peexr.sift.data.embedding.EmbeddingEngine
 import com.peexr.sift.data.embedding.ModelState
 import com.peexr.sift.data.embedding.ModelStore
 import com.peexr.sift.data.local.AppDatabase
 import com.peexr.sift.data.local.CollectionEntity
+import com.peexr.sift.data.local.CollectionMemberRow
+import com.peexr.sift.data.local.MembershipSource
 import com.peexr.sift.data.local.ScreenshotCollectionCrossRef
 import com.peexr.sift.data.local.ScreenshotEntity
 import com.peexr.sift.data.model.JevQuestion
@@ -30,6 +33,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -48,6 +53,20 @@ class ScreenshotRepository(
 ) {
     private val dao = database.screenshotDao()
     private val contentResolver: ContentResolver = context.contentResolver
+
+    private val textEmbeddingCacheMutex = Mutex()
+    private val textEmbeddingCache = mutableMapOf<String, FloatArray>()
+
+    private suspend fun getOrEmbedText(engine: EmbeddingEngine, text: String): FloatArray {
+        textEmbeddingCacheMutex.withLock {
+            textEmbeddingCache[text]?.let { return it }
+        }
+        val vector = engine.embedText(text)
+        textEmbeddingCacheMutex.withLock {
+            textEmbeddingCache[text] = vector
+        }
+        return vector
+    }
 
     // Flow of all screenshots
     val allScreenshotsFlow: Flow<List<ScreenshotItem>> = dao.getAllScreenshotsFlow().map { entities ->
@@ -249,9 +268,127 @@ class ScreenshotRepository(
         Result.success(matchCount)
     }
 
+    suspend fun refreshAutoCollections(onlyCollectionId: String? = null) {
+        val modelStore = modelStoreProvider()
+        val embeddingEngine = embeddingEngineProvider()
+        val isModelReady = modelStore != null && embeddingEngine != null &&
+            (modelStore.state.value is ModelState.Ready || modelStore.isInstalled())
+        if (!isModelReady || embeddingEngine == null) {
+            return
+        }
+
+        try {
+            val (targetCollections, rawEmbeddings) = withContext(Dispatchers.IO) {
+                val collections = if (onlyCollectionId != null) {
+                    val col = dao.getCollectionById(onlyCollectionId)
+                    if (col != null && col.autoFill) listOf(col) else emptyList()
+                } else {
+                    dao.getAutoFillCollections()
+                }
+                val embeddings = dao.getAllEmbeddings()
+                Pair(collections, embeddings)
+            }
+
+            if (targetCollections.isEmpty()) {
+                return
+            }
+
+            val backgroundVectors = CollectionMatcher.BACKGROUND_DESCRIPTIONS.map { desc ->
+                getOrEmbedText(embeddingEngine, desc)
+            }
+
+            val collectionVectors = targetCollections.map { col ->
+                val text = if (col.description.isNotBlank()) col.description else col.name
+                Pair(col, getOrEmbedText(embeddingEngine, text))
+            }
+
+            val collectionMatches = withContext(Dispatchers.Default) {
+                val candidateScreenshots = rawEmbeddings.mapNotNull { row ->
+                    try {
+                        val vec = row.embedding.toFloatArray()
+                        if (vec.size == 128) Pair(row.id, vec) else null
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+
+                collectionVectors.map { (col, vec) ->
+                    val matches = CollectionMatcher.match(
+                        collection = vec,
+                        screenshots = candidateScreenshots,
+                        background = backgroundVectors
+                    )
+                    Pair(col.id, matches)
+                }
+            }
+
+            withContext(Dispatchers.IO) {
+                for ((colId, matches) in collectionMatches) {
+                    val rows = matches.map { (screenshotId, z) ->
+                        ScreenshotCollectionCrossRef(
+                            screenshotId = screenshotId,
+                            collectionId = colId,
+                            source = MembershipSource.AUTO,
+                            score = z
+                        )
+                    }
+                    dao.replaceAutoMembers(colId, rows)
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        }
+    }
+
     suspend fun createCollection(name: String, description: String, colorHex: String) = withContext(Dispatchers.IO) {
         val id = name.lowercase().replace("\\s+".toRegex(), "_") + "_" + System.currentTimeMillis()
         dao.insertCollection(CollectionEntity(id, name, description, colorHex))
+        try {
+            refreshAutoCollections(onlyCollectionId = id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            try {
+                Log.e("ScreenshotRepository", "Failed to refresh auto collection $id after creation", e)
+            } catch (_: Throwable) {}
+        }
+    }
+
+    suspend fun removeFromCollection(screenshotId: Long, collectionId: String) = withContext(Dispatchers.IO) {
+        dao.upsertMembership(
+            ScreenshotCollectionCrossRef(
+                screenshotId = screenshotId,
+                collectionId = collectionId,
+                source = MembershipSource.EXCLUDED,
+                score = null
+            )
+        )
+    }
+
+    suspend fun keepInCollection(screenshotId: Long, collectionId: String) = withContext(Dispatchers.IO) {
+        dao.upsertMembership(
+            ScreenshotCollectionCrossRef(
+                screenshotId = screenshotId,
+                collectionId = collectionId,
+                source = MembershipSource.MANUAL,
+                score = null
+            )
+        )
+    }
+
+    suspend fun addToCollection(screenshotId: Long, collectionId: String) = withContext(Dispatchers.IO) {
+        dao.upsertMembership(
+            ScreenshotCollectionCrossRef(
+                screenshotId = screenshotId,
+                collectionId = collectionId,
+                source = MembershipSource.MANUAL,
+                score = null
+            )
+        )
+    }
+
+    suspend fun getReviewQueue(collectionId: String): List<CollectionMemberRow> = withContext(Dispatchers.IO) {
+        dao.getReviewQueue(collectionId)
     }
 
     suspend fun deleteCollection(id: String) = withContext(Dispatchers.IO) {

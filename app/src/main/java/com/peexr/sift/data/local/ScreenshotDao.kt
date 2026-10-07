@@ -62,6 +62,12 @@ interface ScreenshotDao {
     @Query("DELETE FROM collections WHERE id = :id")
     suspend fun deleteCollection(id: String)
 
+    @Query("SELECT * FROM collections WHERE autoFill = 1")
+    suspend fun getAutoFillCollections(): List<CollectionEntity>
+
+    @Query("SELECT * FROM collections WHERE id = :id")
+    suspend fun getCollectionById(id: String): CollectionEntity?
+
     // Cross reference
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun assignToCollection(crossRef: ScreenshotCollectionCrossRef)
@@ -69,20 +75,44 @@ interface ScreenshotDao {
     @Query("DELETE FROM screenshot_collections WHERE screenshotId = :screenshotId AND collectionId = :collectionId")
     suspend fun removeFromCollection(screenshotId: Long, collectionId: String)
 
+    @Query("DELETE FROM screenshot_collections WHERE collectionId = :collectionId AND source = 'AUTO'")
+    suspend fun clearAutoMembers(collectionId: String)
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertMemberships(rows: List<ScreenshotCollectionCrossRef>)
+
+    @Transaction
+    suspend fun replaceAutoMembers(collectionId: String, rows: List<ScreenshotCollectionCrossRef>) {
+        clearAutoMembers(collectionId)
+        insertMemberships(rows)
+    }
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertMembership(row: ScreenshotCollectionCrossRef)
+
     @Query("""
         SELECT c.* FROM collections c
         INNER JOIN screenshot_collections sc ON c.id = sc.collectionId
-        WHERE sc.screenshotId = :screenshotId
+        WHERE sc.screenshotId = :screenshotId AND sc.source != 'EXCLUDED'
     """)
     suspend fun getCollectionsForScreenshot(screenshotId: Long): List<CollectionEntity>
 
     @Query("""
         SELECT s.* FROM screenshots s
         INNER JOIN screenshot_collections sc ON s.id = sc.screenshotId
-        WHERE sc.collectionId = :collectionId
+        WHERE sc.collectionId = :collectionId AND sc.source != 'EXCLUDED'
         ORDER BY s.dateAdded DESC
     """)
     fun getScreenshotsForCollectionFlow(collectionId: String): Flow<List<ScreenshotEntity>>
+
+    @Query("""
+        SELECT s.*, sc.source AS membershipSource, sc.score AS membershipScore
+        FROM screenshots s
+        INNER JOIN screenshot_collections sc ON s.id = sc.screenshotId
+        WHERE sc.collectionId = :collectionId AND sc.source != 'EXCLUDED'
+        ORDER BY (sc.score IS NULL), sc.score ASC, s.dateAdded DESC
+    """)
+    suspend fun getReviewQueue(collectionId: String): List<CollectionMemberRow>
 
     @Query("SELECT * FROM screenshots WHERE isJunk = 1 ORDER BY dateAdded DESC")
     fun getJunkScreenshotsFlow(): Flow<List<ScreenshotEntity>>

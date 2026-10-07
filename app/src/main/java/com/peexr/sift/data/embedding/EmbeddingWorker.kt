@@ -129,6 +129,7 @@ class EmbeddingWorker(
         val embeddingEngine = if (canEmbed) app.embeddingEngine else null
         val total = itemsToProcess.size
         var processed = 0
+        var embeddedCount = 0
         Log.i(TAG, "Beginning background indexing for $total screenshots (canEmbed=$canEmbed).")
 
         try {
@@ -177,6 +178,7 @@ class EmbeddingWorker(
                         val embedding = embeddingEngine.embedImage(uri)
                         if (embedding != null) {
                             dao.updateEmbedding(item.id, embedding.toByteArray())
+                            embeddedCount++
                         } else {
                             Log.w(TAG, "Could not compute embedding for screenshot id=${item.id}")
                         }
@@ -208,7 +210,18 @@ class EmbeddingWorker(
             }
         }
 
-        Log.i(TAG, "Finished background indexing ($processed/$total processed).")
+        Log.i(TAG, "Finished background indexing ($processed/$total processed, $embeddedCount embedded).")
+
+        if (embeddedCount > 0) {
+            try {
+                app.repository.refreshAutoCollections()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Error refreshing auto collections after indexing", e)
+            }
+        }
+
         Result.success()
     }
 }

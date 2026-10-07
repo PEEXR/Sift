@@ -1,5 +1,7 @@
 package com.peexr.sift.data.local
 
+import androidx.room.ColumnInfo
+import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
@@ -102,8 +104,15 @@ data class CollectionEntity(
     @PrimaryKey val id: String,
     val name: String,
     val description: String,
-    val colorHex: String = "#6750A4"
+    val colorHex: String = "#6750A4",
+    @ColumnInfo(defaultValue = "1") val autoFill: Boolean = true
 )
+
+object MembershipSource {
+    const val AUTO = "AUTO"
+    const val MANUAL = "MANUAL"
+    const val EXCLUDED = "EXCLUDED"
+}
 
 @Entity(
     tableName = "screenshot_collections",
@@ -126,5 +135,13 @@ data class CollectionEntity(
 )
 data class ScreenshotCollectionCrossRef(
     val screenshotId: Long,
-    val collectionId: String
+    val collectionId: String,
+    @ColumnInfo(defaultValue = "MANUAL") val source: String = MembershipSource.MANUAL,
+    val score: Float? = null
+)
+
+data class CollectionMemberRow(
+    @Embedded val screenshot: ScreenshotEntity,
+    val membershipSource: String,
+    val membershipScore: Float?
 )

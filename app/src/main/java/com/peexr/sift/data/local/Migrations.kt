@@ -60,3 +60,31 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
         db.execSQL(SQL_REBUILD_FTS_INDEX)
     }
 }
+
+/**
+ * SQL statements for AppDatabase v2 -> v3 migration.
+ *
+ * Adds autoFill to collections, and source (default 'MANUAL') and score to screenshot_collections.
+ */
+const val SQL_MIGRATION_2_3_COLLECTIONS_AUTO_FILL =
+    "ALTER TABLE collections ADD COLUMN autoFill INTEGER NOT NULL DEFAULT 1"
+
+const val SQL_MIGRATION_2_3_CROSSREF_SOURCE =
+    "ALTER TABLE screenshot_collections ADD COLUMN source TEXT NOT NULL DEFAULT 'MANUAL'"
+
+const val SQL_MIGRATION_2_3_CROSSREF_SCORE =
+    "ALTER TABLE screenshot_collections ADD COLUMN score REAL"
+
+/**
+ * Migration from Database v2 to v3:
+ * 1. Add autoFill column (INTEGER, default 1) to collections table.
+ * 2. Add source column (TEXT, default 'MANUAL') and score column (REAL, nullable) to screenshot_collections.
+ */
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(SQL_MIGRATION_2_3_COLLECTIONS_AUTO_FILL)
+        db.execSQL(SQL_MIGRATION_2_3_CROSSREF_SOURCE)
+        db.execSQL(SQL_MIGRATION_2_3_CROSSREF_SCORE)
+    }
+}
+

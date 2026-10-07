@@ -6,7 +6,11 @@ import com.peexr.sift.data.embedding.EmbeddingEngine
 import com.peexr.sift.data.embedding.ModelState
 import com.peexr.sift.data.embedding.ModelStore
 import com.peexr.sift.data.local.AppDatabase
+import com.peexr.sift.data.local.CollectionEntity
+import com.peexr.sift.data.local.CollectionMemberRow
 import com.peexr.sift.data.local.EmbeddingRow
+import com.peexr.sift.data.local.MembershipSource
+import com.peexr.sift.data.local.ScreenshotCollectionCrossRef
 import com.peexr.sift.data.local.ScreenshotDao
 import com.peexr.sift.data.local.ScreenshotEntity
 import com.peexr.sift.data.perception.PerceptionEngine
@@ -261,5 +265,117 @@ class ScreenshotRepositoryTest {
         )
         assertEquals(listOf(1L, 3L), staleDupBoth)
     }
+
+    @Test
+    fun removeFromCollection_upsertsMembershipAsExcluded() = runBlocking {
+        val repo = createRepository()
+
+        repo.removeFromCollection(screenshotId = 123L, collectionId = "col_test")
+
+        verify(mockDao).upsertMembership(
+            ScreenshotCollectionCrossRef(
+                screenshotId = 123L,
+                collectionId = "col_test",
+                source = MembershipSource.EXCLUDED,
+                score = null
+            )
+        )
+    }
+
+    @Test
+    fun keepInCollection_upsertsMembershipAsManual() = runBlocking {
+        val repo = createRepository()
+
+        repo.keepInCollection(screenshotId = 123L, collectionId = "col_test")
+
+        verify(mockDao).upsertMembership(
+            ScreenshotCollectionCrossRef(
+                screenshotId = 123L,
+                collectionId = "col_test",
+                source = MembershipSource.MANUAL,
+                score = null
+            )
+        )
+    }
+
+    @Test
+    fun addToCollection_upsertsMembershipAsManual() = runBlocking {
+        val repo = createRepository()
+
+        repo.addToCollection(screenshotId = 123L, collectionId = "col_test")
+
+        verify(mockDao).upsertMembership(
+            ScreenshotCollectionCrossRef(
+                screenshotId = 123L,
+                collectionId = "col_test",
+                source = MembershipSource.MANUAL,
+                score = null
+            )
+        )
+    }
+
+    @Test
+    fun getReviewQueue_delegatesToDaoQuery(): Unit = runBlocking {
+        val repo = createRepository()
+
+        val expectedRows = listOf(
+            CollectionMemberRow(
+                screenshot = createScreenshot(1L),
+                membershipSource = MembershipSource.AUTO,
+                membershipScore = 1.6f
+            )
+        )
+        `when`(mockDao.getReviewQueue("col_test")).thenReturn(expectedRows)
+
+        val queue = repo.getReviewQueue("col_test")
+
+        assertEquals(expectedRows, queue)
+        verify(mockDao).getReviewQueue("col_test")
+    }
+
+    @Test
+    fun refreshAutoCollections_whenModelNotReady_doesNothing() = runBlocking {
+        val repo = createRepository()
+
+        `when`(mockModelStore.state).thenReturn(kotlinx.coroutines.flow.MutableStateFlow(ModelState.NotInstalled))
+        `when`(mockModelStore.isInstalled()).thenReturn(false)
+
+        repo.refreshAutoCollections()
+
+        verifyNoInteractions(mockDao)
+    }
+
+    @Test
+    fun refreshAutoCollections_whenModelReady_matchesAndReplacesAutoMembers() = runBlocking {
+        val repo = createRepository()
+
+        `when`(mockModelStore.state).thenReturn(kotlinx.coroutines.flow.MutableStateFlow(ModelState.Ready))
+        `when`(mockModelStore.isInstalled()).thenReturn(true)
+
+        val col1 = CollectionEntity(
+            id = "col_memes",
+            name = "Memes",
+            description = "funny meme images",
+            autoFill = true
+        )
+        `when`(mockDao.getAutoFillCollections()).thenReturn(listOf(col1))
+
+        val dummyVec = FloatArray(128) { 0.1f }
+        dummyVec[0] = 1f
+        `when`(mockEmbeddingEngine.embedText(org.mockito.ArgumentMatchers.anyString())).thenReturn(dummyVec)
+
+        val imgVec = FloatArray(128) { 0.1f }
+        imgVec[0] = 1f
+        `when`(mockDao.getAllEmbeddings()).thenReturn(listOf(createEmbeddingRow(10L, imgVec)))
+
+        repo.refreshAutoCollections()
+
+        // Inspect the recorded call directly: Mockito's eq()/anyList() return null and break on Kotlin non-null params
+        val replaceCalls = org.mockito.Mockito.mockingDetails(mockDao).invocations
+            .filter { it.method.name == "replaceAutoMembers" }
+        assertEquals(1, replaceCalls.size)
+        assertEquals("col_memes", replaceCalls.single().arguments[0])
+    }
 }
+
 

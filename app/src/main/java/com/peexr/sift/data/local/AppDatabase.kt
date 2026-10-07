@@ -14,7 +14,7 @@ import io.requery.android.database.sqlite.RequerySQLiteOpenHelperFactory
         CollectionEntity::class,
         ScreenshotCollectionCrossRef::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -32,7 +32,7 @@ abstract class AppDatabase : RoomDatabase() {
                     "sift_database"
                 )
                     .openHelperFactory(RequerySQLiteOpenHelperFactory())
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .addCallback(object : RoomDatabase.Callback() {
                         override fun onCreate(db: SupportSQLiteDatabase) {
                             super.onCreate(db)

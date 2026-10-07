@@ -6,30 +6,61 @@ Source RFC: `docs/RFC_LOCAL_AI_STACK.md` (Phase 2, adapted: **ONNX Runtime inste
 
 **EXECUTION RULE (hard): Do NOT run Gradle, adb, tests, or ANY long-running/background command. Only read files and edit/create files. The orchestrator builds and tests. Finish your turn promptly with a summary.**
 
-## THIS DISPATCH = Phase 3 / Stage 3a: non-destructive sync + unified OCR & embedding indexing
+## THIS DISPATCH = Phase 3 / Stage 3b: auto-filling collections (collections ARE the categories)
 
-Context: Phase 3 uses ONLY ML Kit OCR (`data/perception/PerceptionEngine.kt`) and EmbeddingGemma 2 (`data/embedding/`). No Laya, no ONNX decision models, no trained classifiers.
+Product rules (decided by the user):
+- There is ONE concept: **collection**. Never introduce a "category"/"group" type, table, or the word category in code or docs. No default collections: the user creates every collection (name + description).
+- A collection auto-fills from its description using EmbeddingGemma 2 embeddings. A screenshot may belong to MANY collections.
+- The user reviews a collection by swiping keep/remove. "Remove from collection" must be REMEMBERED so auto-fill never re-adds it. Users can also add screenshots manually. Deleting the file from storage is a separate existing flow (`createDeletePendingIntent` / `removeDeletedScreenshots`): do not change it.
+- Stack: ML Kit OCR + EmbeddingGemma 2 only. No Laya, no trained models. No UI work in this stage (keep existing UI compiling).
 
-### Bug to fix (critical)
-`ScreenshotRepository.syncMediaStoreScreenshots()` builds fresh `ScreenshotEntity` objects (ocrText = "", isProcessed = false, embedding = null) and saves them with `dao.insertScreenshots` which uses `OnConflictStrategy.REPLACE`. Every sync therefore WIPES existing OCR text, labels, junk fields and embeddings (and a REPLACE is a delete+insert). Fix it:
-1. `ScreenshotDao`: add `@Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertNewScreenshots(screenshots: List<ScreenshotEntity>)` and `@Query("SELECT id FROM screenshots") suspend fun getAllScreenshotIds(): List<Long>`. Remove `insertScreenshots` (REPLACE) and its recursive_triggers comment if nothing else uses it (grep first; update any test that uses it). Keep `PRAGMA recursive_triggers` in AppDatabase untouched.
-2. `syncMediaStoreScreenshots()`: insert with `insertNewScreenshots` (existing rows are left untouched), then delete rows whose ids are no longer in MediaStore: compute stale ids with a new pure top-level function `computeStaleIds(dbIds: Collection<Long>, mediaIds: Collection<Long>): List<Long>` (in the repository file) and delete them via the existing `deleteScreenshots(ids)` in chunks of at most 500 ids. Only delete when the MediaStore query actually returned a cursor (a null cursor means we could not read MediaStore — then delete nothing). Return value stays the number of screenshots seen.
+### 1. Schema (Room v2 -> v3): `data/local/Entities.kt`, `AppDatabase.kt`, `Migrations.kt`
+- `CollectionEntity`: add `@ColumnInfo(defaultValue = "1") val autoFill: Boolean = true`.
+- `ScreenshotCollectionCrossRef`: add `@ColumnInfo(defaultValue = "MANUAL") val source: String = MembershipSource.MANUAL` and `val score: Float? = null` (z-score for AUTO rows). Add `object MembershipSource { const val AUTO = "AUTO"; const val MANUAL = "MANUAL"; const val EXCLUDED = "EXCLUDED" }`.
+- `AppDatabase` version = 3; add `MIGRATION_2_3` in `Migrations.kt` following that file's style (SQL constants + Migration object):
+  - `ALTER TABLE collections ADD COLUMN autoFill INTEGER NOT NULL DEFAULT 1`
+  - `ALTER TABLE screenshot_collections ADD COLUMN source TEXT NOT NULL DEFAULT 'MANUAL'`
+  - `ALTER TABLE screenshot_collections ADD COLUMN score REAL`
+  Existing membership rows become MANUAL. The `@ColumnInfo(defaultValue=...)` values MUST match the SQL defaults or Room's schema validation fails when the database opens. Register with `.addMigrations(MIGRATION_1_2, MIGRATION_2_3)`. Do not touch MIGRATION_1_2.
 
-### Unified indexing (rename nothing; extend `EmbeddingWorker`)
-3. `ScreenshotDao`: add
-   `@Query("SELECT id, uri, isProcessed, (embedding IS NULL) AS needsEmbedding FROM screenshots WHERE isProcessed = 0 OR embedding IS NULL ORDER BY dateAdded DESC") suspend fun getScreenshotsNeedingIndexing(): List<IndexingRow>`
-   and in `Entities.kt` `data class IndexingRow(val id: Long, val uri: String, val isProcessed: Boolean, val needsEmbedding: Boolean)`. Keep `getScreenshotsNeedingEmbedding()` (a device test uses it).
-4. `EmbeddingWorker.doWork()`:
-   - Use `getScreenshotsNeedingIndexing()` instead of the embedding-only query. Newest first (already ordered).
-   - Model readiness no longer short-circuits the whole job: OCR runs regardless; embeddings run only when the model is Ready/installed (compute `canEmbed` once). If nothing needs work (no rows, or only rows needing embeddings while `!canEmbed`) return success early.
-   - Per row: if `!isProcessed` -> `app.perceptionEngine.analyzeImage(uri)`; on success `dao.updatePerception(id, ocrText, labels.joinToString(","))` (same format as `ScreenshotRepository.processScreenshotWithPerception`); on failure log and continue. Then if `needsEmbedding && canEmbed` -> existing embedding code. One failing row never fails the job; rethrow `CancellationException`.
-   - Keep foreground-service behavior, isStopped checks, progress Data and notification updates exactly as now; `total` = number of rows being processed. Notification title stays "Indexing screenshots".
-   - Update the class KDoc to describe OCR + embedding.
+### 2. DAO: `data/local/ScreenshotDao.kt`
+- Queries that list members of a collection, or collections of a screenshot, must ignore EXCLUDED rows: add `AND sc.source != 'EXCLUDED'` to `getCollectionsForScreenshot` and `getScreenshotsForCollectionFlow`.
+- Add:
+  - `@Query("DELETE FROM screenshot_collections WHERE collectionId = :collectionId AND source = 'AUTO'") suspend fun clearAutoMembers(collectionId: String)`
+  - `@Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertMemberships(rows: List<ScreenshotCollectionCrossRef>)` (IGNORE so MANUAL/EXCLUDED rows are never overwritten by AUTO)
+  - `@Transaction suspend fun replaceAutoMembers(collectionId: String, rows: List<ScreenshotCollectionCrossRef>)` = clearAutoMembers + insertMemberships
+  - `@Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertMembership(row: ScreenshotCollectionCrossRef)`
+  - `@Query("SELECT * FROM collections WHERE autoFill = 1") suspend fun getAutoFillCollections(): List<CollectionEntity>`
+  - `@Query("SELECT * FROM collections WHERE id = :id") suspend fun getCollectionById(id: String): CollectionEntity?`
+  - `getReviewQueue(collectionId: String): List<CollectionMemberRow>`: members of one collection (not EXCLUDED), least-confident first:
+    `SELECT s.*, sc.source AS membershipSource, sc.score AS membershipScore FROM screenshots s INNER JOIN screenshot_collections sc ON s.id = sc.screenshotId WHERE sc.collectionId = :collectionId AND sc.source != 'EXCLUDED' ORDER BY (sc.score IS NULL), sc.score ASC, s.dateAdded DESC`
+    with `data class CollectionMemberRow(@Embedded val screenshot: ScreenshotEntity, val membershipSource: String, val membershipScore: Float?)` in Entities.kt.
 
-### Tests
-5. Unit tests (no Android framework): `computeStaleIds` (empty db, empty media, overlap, all stale, duplicates). Put them in `app/src/test/java/com/peexr/sift/data/repository/ScreenshotRepositoryTest.kt` (add tests; keep existing ones passing; that file mocks the DAO with Mockito — update any mock/verify that referenced `insertScreenshots`).
+### 3. Pure matching logic: NEW `app/src/main/java/com/peexr/sift/data/collections/CollectionMatcher.kt`
+- `object CollectionMatcher` with `const val DEFAULT_Z_THRESHOLD = 1.5f` and an internal (never user-visible) list `BACKGROUND_DESCRIPTIONS` with exactly these 20 strings:
+  "meme or joke image", "chat or messaging conversation", "social media post", "study notes or textbook page", "exam question paper", "document or form", "receipt or payment", "ticket or booking", "source code", "video game screen", "map", "shopping product page", "phone settings screen", "news article", "video app screen", "photo of a person", "music player", "calendar or schedule", "email inbox", "home screen with app icons".
+  KDoc must say: these only normalise each image's similarity scale; they are NOT collections and are never shown to the user.
+- `fun zScore(image: FloatArray, collection: FloatArray, background: List<FloatArray>): Float` = (dot(image, collection) − mean over b of dot(image, b)) / (population std over b of dot(image, b)); return 0f if std < 1e-6. Use `dot` from `data/search/VectorMath.kt`.
+- `fun match(collection: FloatArray, screenshots: List<Pair<Long, FloatArray>>, background: List<FloatArray>, threshold: Float = DEFAULT_Z_THRESHOLD): List<Pair<Long, Float>>` returning (screenshotId, z) for every screenshot with z >= threshold, sorted by z descending. Precompute each image's background mean/std once per call. Pure Kotlin, no Android types.
+- KDoc calibration note: measured on the user's real screenshots, z >= 1.5 includes true matches plus a few near misses (the swipe review handles those); z >= 2.0 is high precision.
 
-Do not touch UI files, the embedding engine, tokenizer, patchifier, or docs. Do not add dependencies.
+### 4. Repository: `data/repository/ScreenshotRepository.kt`
+- `suspend fun refreshAutoCollections(onlyCollectionId: String? = null)`: no-op if the model is not Ready/installed. Embed the background descriptions and each auto-fill collection's `description` (fall back to `name` if blank) with `embeddingEngine.embedText(...)`, caching vectors in an in-memory map keyed by the text and guarded by a `Mutex`. Load `dao.getAllEmbeddings()` once; skip vectors that are not 128 floats. For each collection (or only `onlyCollectionId`): `CollectionMatcher.match(...)`, then `dao.replaceAutoMembers(id, rows with source = AUTO and score = z)`. Math on `Dispatchers.Default`, DB on `Dispatchers.IO`. Rethrow `CancellationException`.
+- `createCollection(...)`: keep the signature; after inserting, call `refreshAutoCollections(onlyCollectionId = id)` but never fail creation if that throws (log it; rethrow CancellationException).
+- `suspend fun removeFromCollection(screenshotId: Long, collectionId: String)` → `upsertMembership(source = EXCLUDED, score = null)` (remembered). Update existing callers of the DAO's old `removeFromCollection` (grep) so the UI keeps compiling.
+- `suspend fun keepInCollection(screenshotId: Long, collectionId: String)` → upsert MANUAL, score null (a confirmed keep is no longer auto).
+- `suspend fun addToCollection(screenshotId: Long, collectionId: String)` → upsert MANUAL (also un-excludes).
+- `suspend fun getReviewQueue(collectionId: String): List<CollectionMemberRow>` exposing the DAO query.
+- Existing `classifyScreenshotWithJev` uses `assignToCollection`; leave it working (it inserts MANUAL by default).
+
+### 5. Indexing worker
+- At the end of `EmbeddingWorker.doWork()`, only if it embedded at least one screenshot, call `app.repository.refreshAutoCollections()` inside try/catch (rethrow CancellationException, log others).
+
+### 6. Tests (JVM unit tests)
+- NEW `app/src/test/java/com/peexr/sift/data/collections/CollectionMatcherTest.kt`: zScore math with hand-made normalized vectors; threshold filtering; sort order; std≈0 returns 0; empty inputs; the same screenshot matching two different collections (call match twice).
+- Update `ScreenshotRepositoryTest` mocks if constructor/DAO signatures changed; keep all existing tests passing.
+
+Do not touch the embedding engine, tokenizer, patchifier, docs, or add dependencies.
 
 ---
 BACKGROUND REFERENCE (previous stages, do not act on it):
