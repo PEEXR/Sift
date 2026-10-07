@@ -152,4 +152,30 @@ class EmbeddingEngineTest {
             assertTrue(e.message?.contains("closed") == true)
         }
     }
+
+    @Test
+    fun embeddingEngine_defaultBudget_is280() {
+        val mockContext = mock(Context::class.java)
+        val mockModelStore = ModelStore(mockContext)
+        val engine = EmbeddingEngine(mockContext, mockModelStore)
+        assertEquals(280, engine.maxSoftTokens)
+        assertEquals(ImagePatchifier.DEFAULT_MAX_SOFT_TOKENS, engine.maxSoftTokens)
+    }
+
+    @Test
+    fun embeddingEngine_supportedBudgets_succeeds() {
+        val mockContext = mock(Context::class.java)
+        val mockModelStore = ModelStore(mockContext)
+        for (budget in ImagePatchifier.SUPPORTED_BUDGETS) {
+            val engine = EmbeddingEngine(mockContext, mockModelStore, maxSoftTokens = budget)
+            assertEquals(budget, engine.maxSoftTokens)
+        }
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun embeddingEngine_unsupportedBudget_throwsIllegalArgumentException() {
+        val mockContext = mock(Context::class.java)
+        val mockModelStore = ModelStore(mockContext)
+        EmbeddingEngine(mockContext, mockModelStore, maxSoftTokens = 100)
+    }
 }

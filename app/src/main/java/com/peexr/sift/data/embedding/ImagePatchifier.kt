@@ -32,14 +32,26 @@ data class PatchBatch(
 
 object ImagePatchifier {
 
+    const val DEFAULT_MAX_SOFT_TOKENS = 280
+    val SUPPORTED_BUDGETS = setOf(70, 140, 280, 560, 1120)
+
     /**
      * Calculates the target image dimensions (tW, tH) for EmbeddingGemma vision encoder.
      * Dimensions are always multiples of 48 (pool * patch = 3 * 16).
      * Returns Pair(targetWidth, targetHeight), or null if the image should be skipped.
      */
-    fun calculateTargetSize(origW: Int, origH: Int): Pair<Int, Int>? {
+    fun calculateTargetSize(
+        origW: Int,
+        origH: Int,
+        maxSoftTokens: Int = DEFAULT_MAX_SOFT_TOKENS
+    ): Pair<Int, Int>? {
+        require(maxSoftTokens in SUPPORTED_BUDGETS) {
+            "Unsupported token budget: $maxSoftTokens. Supported: $SUPPORTED_BUDGETS"
+        }
         if (origW <= 0 || origH <= 0) return null
-        val factor = sqrt(2520.0 * 256.0 / (origH.toDouble() * origW.toDouble()))
+        val maxPatches = maxSoftTokens * 9
+        val targetPixels = maxPatches * 256.0
+        val factor = sqrt(targetPixels / (origH.toDouble() * origW.toDouble()))
         var tH = (floor(factor * origH / 48.0) * 48).toInt()
         var tW = (floor(factor * origW / 48.0) * 48).toInt()
 
@@ -48,7 +60,7 @@ object ImagePatchifier {
             val shortSide = maxOf(1, minOf(origH, origW))
             val other = minOf(
                 (floor(longSide.toDouble() / shortSide) * 48).toInt(),
-                (2520 / 9) * 48
+                (maxPatches / 9) * 48
             )
             if (tH == 0) {
                 tH = 48
@@ -109,9 +121,15 @@ object ImagePatchifier {
     /**
      * Resizes and patchifies an Android Bitmap into PatchBatch.
      */
-    fun processBitmap(bitmap: Bitmap): PatchBatch? {
+    fun processBitmap(
+        bitmap: Bitmap,
+        maxSoftTokens: Int = DEFAULT_MAX_SOFT_TOKENS
+    ): PatchBatch? {
+        require(maxSoftTokens in SUPPORTED_BUDGETS) {
+            "Unsupported token budget: $maxSoftTokens. Supported: $SUPPORTED_BUDGETS"
+        }
         if (bitmap.isRecycled) return null
-        val size = calculateTargetSize(bitmap.width, bitmap.height) ?: return null
+        val size = calculateTargetSize(bitmap.width, bitmap.height, maxSoftTokens) ?: return null
         val (tW, tH) = size
         val scaled = Bitmap.createScaledBitmap(bitmap, tW, tH, true)
         val pixels = IntArray(tW * tH)

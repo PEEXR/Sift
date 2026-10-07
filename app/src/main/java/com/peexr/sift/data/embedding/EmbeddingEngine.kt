@@ -65,8 +65,16 @@ class EmbeddingEngine(
     private val tokenizerProvider: suspend () -> GemmaTokenizer = {
         val tokenizerFile = File(modelStore.getModelDir(), "tokenizer.json")
         GemmaTokenizer.getInstance(tokenizerFile)
-    }
+    },
+    val maxSoftTokens: Int = ImagePatchifier.DEFAULT_MAX_SOFT_TOKENS,
+    private val useAcceleratedProviders: Boolean = false
 ) : AutoCloseable {
+
+    init {
+        require(maxSoftTokens in ImagePatchifier.SUPPORTED_BUDGETS) {
+            "Unsupported token budget: $maxSoftTokens. Supported: ${ImagePatchifier.SUPPORTED_BUDGETS}"
+        }
+    }
 
     companion object {
         const val EMBEDDING_DIM = 128
@@ -136,14 +144,17 @@ class EmbeddingEngine(
             val options = OrtSession.SessionOptions()
             try {
                 options.setIntraOpNumThreads(numThreads)
-                try {
-                    options.addNnapi()
-                } catch (_: Throwable) {
+                // Opt-in only: NNAPI copes poorly with this graph's dynamic shapes (minutes per image on device)
+                if (useAcceleratedProviders) {
                     try {
-                        val addXnnpackMethod = options.javaClass.getMethod("addXnnpack", Map::class.java)
-                        addXnnpackMethod.invoke(options, emptyMap<String, String>())
+                        options.addNnapi()
                     } catch (_: Throwable) {
-                        // Execution provider not supported on this device/runtime
+                        try {
+                            val addXnnpackMethod = options.javaClass.getMethod("addXnnpack", Map::class.java)
+                            addXnnpackMethod.invoke(options, emptyMap<String, String>())
+                        } catch (_: Throwable) {
+                            // Execution provider not supported on this device/runtime
+                        }
                     }
                 }
                 return env.createSession(modelPath, options)
@@ -297,7 +308,7 @@ class EmbeddingEngine(
      */
     suspend fun embedImage(bitmap: Bitmap): FloatArray? {
         ensureModelReady()
-        val patchBatch = ImagePatchifier.processBitmap(bitmap) ?: return null
+        val patchBatch = ImagePatchifier.processBitmap(bitmap, maxSoftTokens) ?: return null
         val (env, textSess, visionSess) = getSessions()
 
         return inferenceMutex.withLock {

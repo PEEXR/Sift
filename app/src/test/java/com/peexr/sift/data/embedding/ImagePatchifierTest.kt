@@ -8,7 +8,7 @@ class ImagePatchifierTest {
     @Test
     fun testCalculateTargetSizeStandardImages() {
         // Golden vision image size: 2400 tall x 1080 wide
-        val size = ImagePatchifier.calculateTargetSize(1080, 2400)
+        val size = ImagePatchifier.calculateTargetSize(1080, 2400, maxSoftTokens = 280)
         assertNotNull(size)
         val (tW, tH) = size!!
         assertEquals(528, tW)
@@ -23,14 +23,18 @@ class ImagePatchifierTest {
         assertEquals(2376, numPatches)
         assertEquals(264, numPatches / 9)
 
+        // Default call without explicit maxSoftTokens must match budget 280
+        val defaultSize = ImagePatchifier.calculateTargetSize(1080, 2400)
+        assertEquals(size, defaultSize)
+
         // Landscape version: 1080 tall x 2400 wide
-        val landscape = ImagePatchifier.calculateTargetSize(2400, 1080)
+        val landscape = ImagePatchifier.calculateTargetSize(2400, 1080, maxSoftTokens = 280)
         assertNotNull(landscape)
         assertEquals(1152, landscape!!.first)
         assertEquals(528, landscape.second)
 
         // Square image 1000x1000
-        val square = ImagePatchifier.calculateTargetSize(1000, 1000)
+        val square = ImagePatchifier.calculateTargetSize(1000, 1000, maxSoftTokens = 280)
         assertNotNull(square)
         assertEquals(768, square!!.first)
         assertEquals(768, square.second)
@@ -47,7 +51,7 @@ class ImagePatchifierTest {
     @Test
     fun testCalculateTargetSizeExtremeAspectRatios() {
         // Extreme tall image: triggers tW == 0 xor tH == 0 rule
-        val tall = ImagePatchifier.calculateTargetSize(1, 1000)
+        val tall = ImagePatchifier.calculateTargetSize(1, 1000, maxSoftTokens = 280)
         assertNotNull(tall)
         val (tallW, tallH) = tall!!
         assertEquals(48, tallW)
@@ -57,7 +61,7 @@ class ImagePatchifierTest {
         assertEquals(280, tallPatches / 9)
 
         // Extreme wide image: triggers tW == 0 xor tH == 0 rule
-        val wide = ImagePatchifier.calculateTargetSize(1000, 1)
+        val wide = ImagePatchifier.calculateTargetSize(1000, 1, maxSoftTokens = 280)
         assertNotNull(wide)
         val (wideW, wideH) = wide!!
         assertEquals(13440, wideW)
@@ -65,6 +69,103 @@ class ImagePatchifierTest {
         val widePatches = (wideW / 16) * (wideH / 16)
         assertEquals(2520, widePatches)
         assertEquals(280, widePatches / 9)
+    }
+
+    @Test
+    fun testCalculateTargetSizeBudget140() {
+        // Explicit budget 140: 1080 wide x 2400 tall
+        // Derived from formula:
+        // maxPatches = 140 * 9 = 1260
+        // factor = sqrt(1260 * 256 / (2400 * 1080)) = sqrt(322560 / 2592000) ≈ 0.3527668
+        // tH = floor(factor * 2400 / 48) * 48 = floor(17.63834) * 48 = 17 * 48 = 816 (51 patches)
+        // tW = floor(factor * 1080 / 48) * 48 = floor(7.93725) * 48 = 7 * 48 = 336 (21 patches)
+        val size140 = ImagePatchifier.calculateTargetSize(1080, 2400, maxSoftTokens = 140)
+        assertNotNull(size140)
+        val (tW, tH) = size140!!
+        assertEquals(336, tW)
+        assertEquals(816, tH)
+        assertEquals(0, tW % 48)
+        assertEquals(0, tH % 48)
+
+        val gw = tW / 16
+        val gh = tH / 16
+        assertEquals(21, gw)
+        assertEquals(51, gh)
+
+        val numPatches = gw * gh
+        assertEquals(1071, numPatches)
+        assertTrue("Patch count $numPatches must be <= 1260", numPatches <= 1260)
+        assertEquals(119, numPatches / 9)
+
+        // Landscape version: 1080 tall x 2400 wide
+        val landscape = ImagePatchifier.calculateTargetSize(2400, 1080, maxSoftTokens = 140)
+        assertNotNull(landscape)
+        assertEquals(816, landscape!!.first)
+        assertEquals(336, landscape.second)
+
+        // Square image 1000x1000
+        val square = ImagePatchifier.calculateTargetSize(1000, 1000, maxSoftTokens = 140)
+        assertNotNull(square)
+        assertEquals(528, square!!.first)
+        assertEquals(528, square.second)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun testCalculateTargetSizeUnsupportedBudgetThrows() {
+        ImagePatchifier.calculateTargetSize(1080, 2400, maxSoftTokens = 100)
+    }
+
+    @Test
+    fun testCalculateTargetSizeExtremeAspectRatiosBudget140() {
+        // Extreme tall image (1 x 1000) with budget 140:
+        // other = minOf(floor(1000/1)*48, (1260/9)*48) = minOf(48000, 6720) = 6720
+        val tall = ImagePatchifier.calculateTargetSize(1, 1000, maxSoftTokens = 140)
+        assertNotNull(tall)
+        val (tallW, tallH) = tall!!
+        assertEquals(48, tallW)
+        assertEquals(6720, tallH)
+        assertEquals(0, tallW % 48)
+        assertEquals(0, tallH % 48)
+        val tallPatches = (tallW / 16) * (tallH / 16)
+        assertEquals(1260, tallPatches)
+        assertTrue(tallPatches <= 140 * 9)
+        assertEquals(140, tallPatches / 9)
+
+        // Extreme wide image (1000 x 1) with budget 140:
+        val wide = ImagePatchifier.calculateTargetSize(1000, 1, maxSoftTokens = 140)
+        assertNotNull(wide)
+        val (wideW, wideH) = wide!!
+        assertEquals(6720, wideW)
+        assertEquals(48, wideH)
+        assertEquals(0, wideW % 48)
+        assertEquals(0, wideH % 48)
+        val widePatches = (wideW / 16) * (wideH / 16)
+        assertEquals(1260, widePatches)
+        assertTrue(widePatches <= 140 * 9)
+        assertEquals(140, widePatches / 9)
+    }
+
+    @Test
+    fun testCalculateTargetSizeExtremeAspectRatiosAllSupportedBudgets() {
+        for (budget in ImagePatchifier.SUPPORTED_BUDGETS) {
+            val maxPatches = budget * 9
+
+            val tall = ImagePatchifier.calculateTargetSize(1, 1000, maxSoftTokens = budget)
+            assertNotNull(tall)
+            val (tallW, tallH) = tall!!
+            val tallPatches = (tallW / 16) * (tallH / 16)
+            assertTrue("Tall patches $tallPatches must be <= $maxPatches for budget $budget", tallPatches <= maxPatches)
+            assertEquals(0, tallW % 48)
+            assertEquals(0, tallH % 48)
+
+            val wide = ImagePatchifier.calculateTargetSize(1000, 1, maxSoftTokens = budget)
+            assertNotNull(wide)
+            val (wideW, wideH) = wide!!
+            val widePatches = (wideW / 16) * (wideH / 16)
+            assertTrue("Wide patches $widePatches must be <= $maxPatches for budget $budget", widePatches <= maxPatches)
+            assertEquals(0, wideW % 48)
+            assertEquals(0, wideH % 48)
+        }
     }
 
     @Test
