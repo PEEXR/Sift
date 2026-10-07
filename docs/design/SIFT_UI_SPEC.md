@@ -7,7 +7,7 @@ Visual reference the user likes: the Koda app (github.com/Ivorisnoob/Koda). Koda
 ## Foundations
 
 ### Library versions
-- `androidx.compose.material3:material3:1.5.0-beta01` (1.4.0 stable keeps `MaterialExpressiveTheme` internal). In 1.5.0-beta01 `MaterialExpressiveTheme`, `ButtonGroup`, `FloatingActionButtonMenu`, `ShortNavigationBar`, `ToggleButton` are public; `LoadingIndicator`/`ContainedLoadingIndicator` need `@OptIn(ExperimentalMaterial3ExpressiveApi::class)`.
+- `androidx.compose.material3:material3:1.5.0-alpha18` with Compose BOM 2026.06.01 (already set up — do not change versions). It is the newest release with public `MaterialExpressiveTheme`/`ButtonGroup` that still works with AGP 8; 1.5.0-alpha19+ and beta01 need AGP 9.1 + compileSdk 37, and 1.4.0 stable keeps `MaterialExpressiveTheme` internal. Expressive APIs may need `@OptIn(ExperimentalMaterial3ExpressiveApi::class)`.
 
 ### Color (light scheme; seed violet #6B3FD4)
 | Role | Hex |
