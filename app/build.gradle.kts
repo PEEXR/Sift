@@ -31,6 +31,14 @@ android {
                 "proguard-rules.pro"
             )
         }
+        // Release-like build for measuring performance on device: not debuggable, debug-signed so it
+        // installs over the debug app and keeps its data (model files, database).
+        create("benchmark") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+            isDebuggable = false
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
