@@ -94,4 +94,36 @@ class CollectionLogicTest {
         assertEquals(CollectionPalette.first(), collectionColors("non-existent"))
         assertEquals(CollectionPalette.first(), collectionColors(""))
     }
+
+    @Test
+    fun formatBytes_zeroBytesReturnsZeroMb() {
+        assertEquals("0.0 MB", formatBytes(0L))
+    }
+
+    @Test
+    fun formatBytes_negativeBytesClampedToZeroMb() {
+        assertEquals("0.0 MB", formatBytes(-1024L))
+    }
+
+    @Test
+    fun formatBytes_megabytesFormattedWithOneDecimal() {
+        assertEquals("1.0 MB", formatBytes(1024L * 1024L))
+        assertEquals("312.0 MB", formatBytes(312L * 1024L * 1024L))
+        val bytes12Point5Mb = (12.5 * 1024.0 * 1024.0).toLong()
+        assertEquals("12.5 MB", formatBytes(bytes12Point5Mb))
+    }
+
+    @Test
+    fun formatBytes_thresholdAt1024Mb() {
+        val exact1024Mb = 1024L * 1024L * 1024L
+        assertEquals("1024.0 MB", formatBytes(exact1024Mb))
+    }
+
+    @Test
+    fun formatBytes_gigabytesWhenOver1024Mb() {
+        val bytes1Point5Gb = (1.5 * 1024.0 * 1024.0 * 1024.0).toLong()
+        assertEquals("1.5 GB", formatBytes(bytes1Point5Gb))
+        val bytes2Gb = 2L * 1024L * 1024L * 1024L
+        assertEquals("2.0 GB", formatBytes(bytes2Gb))
+    }
 }

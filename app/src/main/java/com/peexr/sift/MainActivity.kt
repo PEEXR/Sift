@@ -55,6 +55,7 @@ class MainActivity : ComponentActivity() {
                     libraryViewModel = libraryViewModel,
                     cleanupViewModel = cleanupViewModel,
                     settingsManager = app.settingsManager,
+                    repository = (application as SiftApplication).repository,
                     collectionsViewModel = collectionsViewModel
                 )
             }

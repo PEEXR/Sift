@@ -72,9 +72,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.peexr.sift.data.model.ScreenshotItem
+import com.peexr.sift.ui.components.ScreenshotTile
 import com.peexr.sift.ui.navigation.FloatingNavClearance
 import androidx.compose.foundation.layout.navigationBarsPadding
 import com.peexr.sift.ui.theme.SiftTheme
@@ -121,6 +120,21 @@ fun LibraryScreen(
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val onOpenScreenshot: (ScreenshotItem) -> Unit = remember(context) {
+        { item ->
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(Uri.parse(item.uri), "image/*")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            try {
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                Log.e("LibraryScreen", "Failed to open screenshot ${item.id}", e)
+            }
+        }
+    }
+
     val snackbarHostState = remember { SnackbarHostState() }
 
     // Indexing only progresses while Sift is on screen (the OEM freezer pauses it in the background),
@@ -254,7 +268,7 @@ fun LibraryScreen(
                                 items = uiState.searchResults,
                                 key = { it.id }
                             ) { item ->
-                                ScreenshotTile(item = item)
+                                ScreenshotTile(item = item, onClick = onOpenScreenshot)
                             }
                         }
                     } else {
@@ -303,7 +317,7 @@ fun LibraryScreen(
                                     items = section.items,
                                     key = { it.id }
                                 ) { item ->
-                                    ScreenshotTile(item = item)
+                                    ScreenshotTile(item = item, onClick = onOpenScreenshot)
                                 }
                             }
                         }
@@ -501,48 +515,6 @@ private fun IndexingCard(
                 else -> Unit
             }
         }
-    }
-}
-
-@Composable
-private fun ScreenshotTile(
-    item: ScreenshotItem,
-    modifier: Modifier = Modifier
-) {
-    val context = LocalContext.current
-    val formattedDate = remember(item.dateAdded) {
-        val instant = Instant.ofEpochSecond(item.dateAdded)
-        val localDate = instant.atZone(ZoneId.systemDefault()).toLocalDate()
-        localDate.format(DateTimeFormatter.ofPattern("MMMM d, yyyy", Locale.US))
-    }
-
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .aspectRatio(0.62f)
-            .clip(MaterialTheme.shapes.medium)
-            .background(MaterialTheme.colorScheme.surfaceContainer)
-            .clickable {
-                val intent = Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(Uri.parse(item.uri), "image/*")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
-                try {
-                    context.startActivity(intent)
-                } catch (e: Exception) {
-                    Log.e("LibraryScreen", "Failed to open screenshot ${item.id}", e)
-                }
-            }
-    ) {
-        AsyncImage(
-            model = ImageRequest.Builder(context)
-                .data(item.uri)
-                .crossfade(true)
-                .build(),
-            contentDescription = "Screenshot from $formattedDate",
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize()
-        )
     }
 }
 

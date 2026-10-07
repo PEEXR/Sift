@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.peexr.sift.data.model.CollectionMemberItem
 import com.peexr.sift.data.model.CollectionSummary
 import com.peexr.sift.data.repository.ScreenshotRepository
+import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -35,6 +36,22 @@ fun filterMembers(
         MemberFilter.ALL -> members
         MemberFilter.AUTO -> members.filter { !it.kept }
         MemberFilter.KEPT -> members.filter { it.kept }
+    }
+}
+
+/**
+ * Formats a byte count into a human-readable string:
+ * - MB with one decimal place up to 1024 MB
+ * - GB with one decimal place when > 1024 MB
+ */
+fun formatBytes(bytes: Long): String {
+    val safeBytes = bytes.coerceAtLeast(0L)
+    val mb = safeBytes.toDouble() / (1024.0 * 1024.0)
+    return if (mb > 1024.0) {
+        val gb = safeBytes.toDouble() / (1024.0 * 1024.0 * 1024.0)
+        String.format(Locale.US, "%.1f GB", gb)
+    } else {
+        String.format(Locale.US, "%.1f MB", mb)
     }
 }
 
