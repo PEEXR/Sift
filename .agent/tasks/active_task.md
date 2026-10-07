@@ -2,13 +2,36 @@
 
 Source RFC: `docs/RFC_LOCAL_AI_STACK.md` (Phase 2, adapted: **ONNX Runtime instead of LiteRT**, **model downloaded on demand**, **audio encoder excluded**). Do NOT touch Phase 3/4 (no Laya, no Jev changes, no CleanupScreen/UI changes). Do NOT commit; the orchestrator reviews and commits.
 
-**STATUS: Stage 2b is DONE and reviewed (files already in `data/embedding/`: `ModelStore.kt`, `ModelDownloader.kt`, `FileHashUtils.kt` + test). Do NOT redo or rewrite 2b; start at Stage 2c and reuse `ModelStore` as-is (only add to it if strictly needed).**
+**STATUS: Phase 2 is committed. Ignore the BACKGROUND REFERENCE sections at the bottom of this file.**
 
-**EXECUTION RULE (hard): Do NOT run Gradle, tests, or ANY long-running/background command. Only read files and edit/create files. The orchestrator builds and tests after you finish. Previous runs died because the agent spawned background build tasks and idled. Finish your turn promptly with a summary once the files are written.**
+**EXECUTION RULE (hard): Do NOT run Gradle, adb, tests, or ANY long-running/background command. Only read files and edit/create files. The orchestrator builds and tests. Finish your turn promptly with a summary.**
 
-**STATUS: Stages 2b, 2c, 2d are DONE, REVIEWED and passing (ModelStore, ModelDownloader, GemmaTokenizer, ImagePatchifier, EmbeddingEngine with `embedText(query)`/`embedImage(uri)`; `SiftApplication` already exposes lazy `modelStore` and `embeddingEngine`). Do NOT modify them.**
+## THIS DISPATCH = Stage 2i: run indexing as a foreground service (defeat the OEM freezer)
 
-**THIS DISPATCH = ONE STAGE ONLY: Stage 2e (EmbeddingWorker + EmbeddingScheduler + `work-runtime-ktx` dependency + `ScreenshotRepository.hybridSearch` + FTS query sanitizer). Check `Entities.kt` for the screenshot URI field and `RankFusion.kt`/`VectorMath.kt` APIs before writing code. Access the engine/store via `(applicationContext as SiftApplication)`.**
+Findings (orchestrator, on device): this vivo phone's `fast_freezer` freezes the app process while `EmbeddingWorker` runs in the background (only 2 images embedded in 180 s instead of ~16; ~11 s/image when unfrozen). A foreground service keeps the process un-freezable. Android 12+ forbids STARTING a foreground service from the background, so the worker must try and degrade gracefully.
+
+### 1. `app/src/main/java/com/peexr/sift/data/embedding/EmbeddingWorker.kt`
+- At the start of `doWork()`, after the "model not ready" early-return and after `pending` is known to be non-empty, call `setForeground(createForegroundInfo(0, total))` inside try/catch: catch `CancellationException` and rethrow; catch any other `Exception` (e.g. `IllegalStateException`, `ForegroundServiceStartNotAllowedException`) -> `Log.w` that indexing continues best-effort in the background, and continue.
+- Override `getForegroundInfo()` as well (required for expedited/long-running work) returning `createForegroundInfo(0, 0)`.
+- After each processed item, update the notification at most every 5 items (and on the last) via `setForegroundAsync`/`setForeground` with the same try/catch policy (never fail the work because of a notification).
+- `createForegroundInfo(done: Int, total: Int)`: create notification channel `"sift_indexing"` (name "Screenshot indexing", `IMPORTANCE_LOW`) on API 26+ (minSdk is 26, so always); notification: small icon `android.R.drawable.stat_sys_download` (no new drawables), title "Indexing screenshots", text "$done / $total", `setOngoing(true)`, `setOnlyAlertOnce(true)`, determinate progress when total > 0. Notification id constant `NOTIFICATION_ID = 4201`.
+  - Foreground service type: API >= 35 -> `ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING`; API 29..34 -> `ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC`; below 29 -> use the 2-arg `ForegroundInfo(id, notification)` constructor.
+- Keep all existing behavior (per-item DB writes, isStopped checks, progress Data, error handling).
+
+### 2. `app/src/main/AndroidManifest.xml`
+- Add permissions: `android.permission.FOREGROUND_SERVICE`, `android.permission.FOREGROUND_SERVICE_DATA_SYNC`, `android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING`, `android.permission.POST_NOTIFICATIONS` (runtime request is out of scope; the UI will do it later).
+- Inside `<application>`, override WorkManager's service so it is allowed those types:
+  `<service android:name="androidx.work.impl.foreground.SystemForegroundService" android:foregroundServiceType="dataSync|mediaProcessing" tools:node="merge" />`
+  Add `xmlns:tools="http://schemas.android.com/tools"` to the `<manifest>` element if missing.
+
+### 3. `app/src/androidTest/java/com/peexr/sift/data/embedding/EmbeddingWorkerDeviceTest.kt`
+- Add instrumentation arg `startFromForeground` (default "true"). When true: launch `ActivityScenario.launch(com.peexr.sift.MainActivity::class.java)`, call `EmbeddingScheduler.enqueueIndexingNow(context)`, wait until the WorkInfo state is RUNNING (max 20 s), then sleep 5 s and `close()` the scenario so the app goes to the background while the work continues. When false: keep the current behavior (enqueue with no activity).
+- Log which mode ran. Everything else unchanged (observe window, cancel, pendingBefore/After, assert embedded > 0).
+
+Do not modify any other files.
+
+---
+BACKGROUND REFERENCE (previous stages, do not act on it):
 
 Work through stages 2c → 2e **in order**. After each stage run `.\gradlew.bat testDebugUnitTest` (from `sift_android/`) and fix failures before moving on. Keep all new code under `app/src/main/java/com/peexr/sift/data/embedding/` unless stated.
 
