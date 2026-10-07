@@ -10,10 +10,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
-import com.peexr.sift.ui.cleanup.CleanupViewModel
 import com.peexr.sift.ui.collections.CollectionsViewModel
 import com.peexr.sift.ui.library.LibraryViewModel
 import com.peexr.sift.ui.navigation.SiftMainApp
+import com.peexr.sift.ui.review.ReviewViewModel
 import com.peexr.sift.ui.theme.SiftTheme
 
 class MainActivity : ComponentActivity() {
@@ -38,8 +38,8 @@ class MainActivity : ComponentActivity() {
         CollectionsViewModel.Factory((application as SiftApplication).repository)
     }
 
-    private val cleanupViewModel: CleanupViewModel by viewModels {
-        CleanupViewModel.Factory((application as SiftApplication).repository)
+    private val reviewViewModel: ReviewViewModel by viewModels {
+        ReviewViewModel.Factory((application as SiftApplication).repository)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -53,8 +53,7 @@ class MainActivity : ComponentActivity() {
             SiftTheme {
                 SiftMainApp(
                     libraryViewModel = libraryViewModel,
-                    cleanupViewModel = cleanupViewModel,
-                    settingsManager = app.settingsManager,
+                    reviewViewModel = reviewViewModel,
                     repository = (application as SiftApplication).repository,
                     collectionsViewModel = collectionsViewModel
                 )

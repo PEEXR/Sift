@@ -505,6 +505,17 @@ class ScreenshotRepository(
         refreshAutoCollections(onlyCollectionId = id)
     }
 
+    suspend fun restoreAutoMembership(screenshotId: Long, collectionId: String, score: Float?) = withContext(Dispatchers.IO) {
+        dao.upsertMembership(
+            ScreenshotCollectionCrossRef(
+                screenshotId = screenshotId,
+                collectionId = collectionId,
+                source = MembershipSource.AUTO,
+                score = score
+            )
+        )
+    }
+
 
     fun createDeletePendingIntent(uris: List<Uri>): PendingIntent? {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

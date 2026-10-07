@@ -26,16 +26,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.peexr.sift.data.local.SettingsManager
 import com.peexr.sift.data.repository.ScreenshotRepository
-import com.peexr.sift.ui.cleanup.CleanupScreen
-import com.peexr.sift.ui.cleanup.CleanupViewModel
 import com.peexr.sift.ui.collections.CollectionDetailRoute
 import com.peexr.sift.ui.collections.CollectionDetailViewModel
 import com.peexr.sift.ui.collections.CollectionsRoute
 import com.peexr.sift.ui.collections.CollectionsViewModel
 import com.peexr.sift.ui.library.LibraryRoute
 import com.peexr.sift.ui.library.LibraryViewModel
+import com.peexr.sift.ui.review.ReviewRoute
+import com.peexr.sift.ui.review.ReviewViewModel
 import com.peexr.sift.ui.settings.SettingsDialog
 import com.peexr.sift.ui.viewer.ViewerRoute
 import com.peexr.sift.ui.viewer.ViewerViewModel
@@ -44,14 +43,14 @@ import com.peexr.sift.ui.viewer.ViewerViewModel
 @Composable
 fun SiftMainApp(
     libraryViewModel: LibraryViewModel,
-    cleanupViewModel: CleanupViewModel,
-    settingsManager: SettingsManager,
+    reviewViewModel: ReviewViewModel,
     repository: ScreenshotRepository,
     collectionsViewModel: CollectionsViewModel
 ) {
     var currentDestination by remember { mutableStateOf<SiftDestination>(SiftDestination.Library) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var openCollectionId by remember { mutableStateOf<String?>(null) }
+    var reviewCollectionId by remember { mutableStateOf<String?>(null) }
     var viewerScreenshotId by remember { mutableStateOf<Long?>(null) }
 
     val destinations = listOf(
@@ -89,7 +88,13 @@ fun SiftMainApp(
                         )
                     }
                     is SiftDestination.Review -> {
-                        CleanupScreen(viewModel = cleanupViewModel)
+                        ReviewRoute(
+                            viewModel = reviewViewModel,
+                            initialCollectionId = reviewCollectionId,
+                            onConsumedCollectionId = { reviewCollectionId = null },
+                            onOpenScreenshot = { item -> viewerScreenshotId = item.id },
+                            onNavigateToCollections = { currentDestination = SiftDestination.Collections }
+                        )
                     }
                 }
             }
@@ -112,7 +117,8 @@ fun SiftMainApp(
                     CollectionDetailRoute(
                         viewModel = detailViewModel,
                         onBack = { openCollectionId = null },
-                        onReview = {
+                        onReview = { reviewId ->
+                            reviewCollectionId = reviewId
                             openCollectionId = null
                             currentDestination = SiftDestination.Review
                         },
@@ -164,11 +170,7 @@ fun SiftMainApp(
 
     if (showSettingsDialog) {
         SettingsDialog(
-            currentApiKey = settingsManager.typeSafeApiKey ?: "",
-            onDismiss = { showSettingsDialog = false },
-            onSaveKey = { newKey ->
-                settingsManager.typeSafeApiKey = newKey
-            }
+            onDismiss = { showSettingsDialog = false }
         )
     }
 }
