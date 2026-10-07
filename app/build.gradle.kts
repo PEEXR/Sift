@@ -46,6 +46,9 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+        jniLibs {
+            pickFirsts += "**/libc++_shared.so"
+        }
     }
 }
 
@@ -80,9 +83,15 @@ dependencies {
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
+    // ONNX Runtime (On-Device ML Inference)
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.30.0")
+
     // Coroutines & Task Await for ML Kit
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
+
+    // WorkManager (Background Indexing)
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 
     // Room Database
     val roomVersion = "2.6.1"
@@ -94,6 +103,7 @@ dependencies {
 
     // Testing
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.mockito:mockito-core:5.13.0")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
