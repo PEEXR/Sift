@@ -140,4 +140,17 @@ class RankFusionTest {
         assertEquals("", sanitizeFtsQuery("    "))
         assertEquals("", sanitizeFtsQuery("*** : () - + ~ {}"))
     }
+
+    @Test
+    fun testSanitizeFtsQueryMultipleTokens() {
+        assertEquals("\"foo\" \"bar\"*", sanitizeFtsQuery("foo bar"))
+        assertEquals("\"first\" \"second\" \"third\"*", sanitizeFtsQuery("first second third"))
+        assertEquals("\"order\" \"invoice\"*", sanitizeFtsQuery("  order   invoice  "))
+    }
+
+    @Test
+    fun testSanitizeFtsQueryMixedPunctuationTokens() {
+        assertEquals("\"receipt\" \"target\"*", sanitizeFtsQuery("\"receipt\" target"))
+        assertEquals("\"uber\" \"receipt\"*", sanitizeFtsQuery("uber: receipt*"))
+    }
 }

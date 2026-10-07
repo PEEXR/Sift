@@ -28,6 +28,12 @@ interface ScreenshotDao {
     @Query("SELECT id, embedding FROM screenshots WHERE embedding IS NOT NULL")
     suspend fun getAllEmbeddings(): List<EmbeddingRow>
 
+    @Query("SELECT id, uri FROM screenshots WHERE embedding IS NULL")
+    suspend fun getScreenshotsNeedingEmbedding(): List<ScreenshotUriRow>
+
+    @Query("SELECT * FROM screenshots WHERE id IN (:ids)")
+    suspend fun getScreenshotsByIds(ids: List<Long>): List<ScreenshotEntity>
+
     @SkipQueryVerification
     @Query("SELECT rowid FROM screenshots_fts WHERE screenshots_fts MATCH :query ORDER BY rank LIMIT :limit")
     suspend fun searchOcrIds(query: String, limit: Int = 100): List<Long>

@@ -85,6 +85,11 @@ data class EmbeddingRow(
     }
 }
 
+data class ScreenshotUriRow(
+    val id: Long,
+    val uri: String
+)
+
 @Entity(tableName = "collections")
 data class CollectionEntity(
     @PrimaryKey val id: String,

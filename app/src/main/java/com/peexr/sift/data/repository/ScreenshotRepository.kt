@@ -7,7 +7,12 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import android.util.Log
+import com.peexr.sift.SiftApplication
 import com.peexr.sift.data.api.JevApiClient
+import com.peexr.sift.data.embedding.EmbeddingEngine
+import com.peexr.sift.data.embedding.ModelState
+import com.peexr.sift.data.embedding.ModelStore
 import com.peexr.sift.data.local.AppDatabase
 import com.peexr.sift.data.local.CollectionEntity
 import com.peexr.sift.data.local.ScreenshotCollectionCrossRef
@@ -16,6 +21,11 @@ import com.peexr.sift.data.model.JevQuestion
 import com.peexr.sift.data.model.JevRequest
 import com.peexr.sift.data.model.ScreenshotItem
 import com.peexr.sift.data.perception.PerceptionEngine
+import com.peexr.sift.data.search.reciprocalRankFusion
+import com.peexr.sift.data.search.sanitizeFtsQuery
+import com.peexr.sift.data.search.toFloatArray
+import com.peexr.sift.data.search.topKBySimilarity
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -32,7 +42,9 @@ class ScreenshotRepository(
     private val context: Context,
     private val database: AppDatabase,
     private val perceptionEngine: PerceptionEngine,
-    private val jevApiClient: JevApiClient
+    private val jevApiClient: JevApiClient,
+    private val modelStoreProvider: () -> ModelStore? = { (context.applicationContext as? SiftApplication)?.modelStore },
+    private val embeddingEngineProvider: () -> EmbeddingEngine? = { (context.applicationContext as? SiftApplication)?.embeddingEngine }
 ) {
     private val dao = database.screenshotDao()
     private val contentResolver: ContentResolver = context.contentResolver
@@ -242,6 +254,90 @@ class ScreenshotRepository(
 
     suspend fun removeDeletedScreenshots(ids: List<Long>) = withContext(Dispatchers.IO) {
         dao.deleteScreenshots(ids)
+    }
+
+    /**
+     * Executes an instant hybrid search combining sparse lexical matching (SQLite FTS5 on OCR text)
+     * and dense semantic matching (128-d cosine similarity on EmbeddingGemma 2 vectors)
+     * fused using Reciprocal Rank Fusion (RRF).
+     *
+     * Degrades gracefully to lexical-only search if the embedding model is absent or not ready.
+     *
+     * @param query Search query from user.
+     * @param limit Maximum number of results to return (defaults to 50).
+     * @return List of [ScreenshotEntity] matching the query, ordered by fused ranking.
+     */
+    suspend fun hybridSearch(query: String, limit: Int = 50): List<ScreenshotEntity> = withContext(Dispatchers.IO) {
+        if (query.isBlank() || limit <= 0) {
+            return@withContext emptyList()
+        }
+
+        // 1. Sparse lexical search via FTS5
+        val sanitizedQuery = sanitizeFtsQuery(query)
+        val lexicalIds: List<Long> = if (sanitizedQuery.isBlank()) {
+            emptyList()
+        } else {
+            try {
+                dao.searchOcrIds(sanitizedQuery, limit)
+            } catch (_: android.database.sqlite.SQLiteException) {
+                emptyList()
+            } catch (e: Exception) {
+                if (e.javaClass.simpleName.contains("SQLiteException")) {
+                    emptyList()
+                } else {
+                    throw e
+                }
+            }
+        }
+
+        // 2. Dense semantic search via EmbeddingGemma 2 (if model is Ready)
+        val modelStore = modelStoreProvider()
+        val embeddingEngine = embeddingEngineProvider()
+        val isModelReady = modelStore != null && embeddingEngine != null &&
+            (modelStore.state.value is ModelState.Ready || modelStore.isInstalled())
+
+        val denseIds: List<Long> = if (isModelReady && embeddingEngine != null) {
+            try {
+                val queryEmbedding = embeddingEngine.embedText(query)
+                val embeddingRows = dao.getAllEmbeddings()
+                if (embeddingRows.isNotEmpty()) {
+                    val candidates = embeddingRows.mapNotNull { row ->
+                        try {
+                            Pair(row.id, row.embedding.toFloatArray())
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                    topKBySimilarity(queryEmbedding, candidates, limit).map { it.first }
+                } else {
+                    emptyList()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                try {
+                    Log.w("ScreenshotRepository", "Dense embedding search failed; falling back to lexical", e)
+                } catch (_: Throwable) {}
+                emptyList()
+            }
+        } else {
+            emptyList()
+        }
+
+        // 3. Reciprocal Rank Fusion (RRF)
+        val fusedIds = reciprocalRankFusion(
+            rankings = listOf(lexicalIds, denseIds),
+            limit = limit
+        )
+
+        if (fusedIds.isEmpty()) {
+            return@withContext emptyList()
+        }
+
+        // 4. Map IDs back to entities, strictly preserving fused order
+        val entities = dao.getScreenshotsByIds(fusedIds)
+        val entityMap = entities.associateBy { it.id }
+        fusedIds.mapNotNull { id -> entityMap[id] }
     }
 
     private suspend fun ScreenshotEntity.toDomainModel(): ScreenshotItem {
