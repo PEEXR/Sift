@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sift Swipe Review</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&amp;family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#6B3FD4}a:hover{color:#4B22A8}
+</style>
+</helmet>
+<div style="{{rootStyle}}">
+
+  <div style="display: flex; align-items: center; gap: 10px; padding: 18px 16px 0 16px">
+    <a href="Collection.dc.html" aria-label="Back" style="width: 48px; height: 48px; border-radius: 999px; background: rgba(255,255,255,0.75); color: #2A1450; display: flex; align-items: center; justify-content: center; flex-shrink: 0">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+    </a>
+    <form onSubmit="{{submit}}" style="flex: 1; min-width: 0; height: 52px; border-radius: 999px; background: rgba(255,255,255,0.85); display: flex; align-items: center; gap: 10px; padding: 0 6px 0 16px; color: #4A3F66">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+      <input aria-label="Find screenshots to clean up" placeholder="Find screenshots to clean up" value="{{query}}" onChange="{{typed}}" style="flex: 1; min-width: 0; border: 0; background: transparent; font: 500 15px 'DM Sans', sans-serif; color: #1E1530; outline: none">
+      <sc-if value="{{inSearch}}" hint-placeholder-val="{{false}}">
+        <button type="button" onClick="{{clear}}" aria-label="Clear search" style="width: 40px; height: 40px; border-radius: 999px; border: 0; background: #ECE3FA; color: #2A1450; display: flex; align-items: center; justify-content: center; cursor: pointer">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </sc-if>
+    </form>
+  </div>
+
+  <sc-if value="{{showSuggestions}}" hint-placeholder-val="{{true}}">
+    <div style="display: flex; gap: 6px; padding: 10px 16px 0 74px; flex-wrap: wrap">
+      <sc-for list="{{suggestions}}" as="g" hint-placeholder-count="3">
+        <button onClick="{{g.pick}}" style="height: 34px; padding: 0 12px; border-radius: 999px; border: 0; background: rgba(255,255,255,0.7); color: #2A1450; font: 600 13px 'DM Sans', sans-serif; cursor: pointer">{{g.label}}</button>
+      </sc-for>
+    </div>
+  </sc-if>
+
+  <div style="padding: 14px 16px 0 16px; display: flex; flex-direction: column; gap: 6px">
+    <div style="display: flex; justify-content: space-between; font-size: 14px; font-weight: 700; color: #2A1450">
+      <span>{{contextLabel}}</span><span>{{progressLabel}}</span>
+    </div>
+    <div style="height: 14px; border-radius: 999px; background: rgba(42, 20, 80, 0.14); overflow: hidden">
+      <div style="{{progressStyle}}"></div>
+    </div>
+  </div>
+
+  <sc-if value="{{active}}" hint-placeholder-val="{{true}}">
+    <div style="position: relative; height: 486px; margin: 18px 16px 0 16px">
+      <sc-for list="{{stack}}" as="s" hint-placeholder-count="3">
+        <div onPointerDown="{{s.down}}" onPointerMove="{{s.move}}" onPointerUp="{{s.up}}" onPointerCancel="{{s.up}}" style="{{s.style}}">
+          <div style="{{s.art}}">
+            <div style="width: 70%; height: 14px; border-radius: 7px; background: #1E1530"></div>
+            <div style="{{s.blob}}"></div>
+            <div style="width: 55%; height: 14px; border-radius: 7px; background: #1E1530"></div>
+            <div style="width: 40%; height: 10px; border-radius: 5px; background: #6B6480"></div>
+          </div>
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 6px 2px 6px">
+            <span style="font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 22px; color: #2A1450">{{s.date}}</span>
+            <span style="height: 32px; padding: 0 12px; border-radius: 999px; background: #F3ECFF; color: #4A2A8A; font-size: 13px; font-weight: 700; display: flex; align-items: center">{{s.match}}</span>
+          </div>
+          <div style="{{s.keepStamp}}">KEEP</div>
+          <div style="{{s.leftStamp}}">{{leftWord}}</div>
+        </div>
+      </sc-for>
+    </div>
+
+    <sc-if value="{{showMarkRest}}" hint-placeholder-val="{{false}}">
+      <div style="display: flex; justify-content: center; padding-top: 14px">
+        <button onClick="{{markRest}}" style="height: 44px; padding: 0 18px; border-radius: 999px; border: 0; background: #2A1450; color: #FFFFFF; font: 700 14px 'DM Sans', sans-serif; cursor: pointer">{{markRestLabel}}</button>
+      </div>
+    </sc-if>
+
+    <div style="display: flex; align-items: center; justify-content: space-between; padding: 16px 28px 0 28px">
+      <button onClick="{{left}}" aria-label="{{leftAria}}" style="width: 80px; height: 80px; border-radius: 999px; border: 0; background: #FF6B57; color: #3A0A00; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 8px 20px rgba(255, 107, 87, 0.35)">
+        <sc-if value="{{inSearch}}" hint-placeholder-val="{{false}}">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
+        </sc-if>
+        <sc-if value="{{inCollection}}" hint-placeholder-val="{{true}}">
+          <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </sc-if>
+      </button>
+      <sc-if value="{{inCollection}}" hint-placeholder-val="{{true}}">
+        <button onClick="{{deleteFile}}" style="height: 54px; padding: 0 16px; border-radius: 18px; border: 2px solid #2A1450; background: transparent; color: #2A1450; font: 700 14px 'DM Sans', sans-serif; display: flex; align-items: center; gap: 8px; cursor: pointer">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
+          Delete file
+        </button>
+      </sc-if>
+      <sc-if value="{{inSearch}}" hint-placeholder-val="{{false}}">
+        <span style="font-size: 14px; font-weight: 700; color: #2A1450">{{markedLabel}}</span>
+      </sc-if>
+      <button onClick="{{keep}}" aria-label="Keep" style="width: 80px; height: 80px; border-radius: 999px; border: 0; background: #C6F24E; color: #1E2B00; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 8px 20px rgba(150, 190, 40, 0.35)">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>
+      </button>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{doneCollection}}" hint-placeholder-val="{{false}}">
+    <div style="margin: 24px 16px 0 16px; border-radius: 40px; background: #2A1450; color: #FFFFFF; padding: 30px 26px; display: flex; flex-direction: column; gap: 18px">
+      <div style="width: 72px; height: 72px; border-radius: 24px; background: #C6F24E; color: #1E2B00; display: flex; align-items: center; justify-content: center; transform: rotate(-8deg)">
+        <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>
+      </div>
+      <div style="font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 52px; line-height: 0.95; letter-spacing: -2px">Memes<br>sorted!</div>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap">
+        <span style="height: 36px; padding: 0 14px; border-radius: 999px; background: #C6F24E; color: #1E2B00; font-weight: 700; font-size: 14px; display: flex; align-items: center">{{keptLabel}}</span>
+        <span style="height: 36px; padding: 0 14px; border-radius: 999px; background: #FF6B57; color: #3A0A00; font-weight: 700; font-size: 14px; display: flex; align-items: center">{{removedLabel}}</span>
+        <span style="height: 36px; padding: 0 14px; border-radius: 999px; background: #FFFFFF; color: #2A1450; font-weight: 700; font-size: 14px; display: flex; align-items: center">{{deletedLabel}}</span>
+      </div>
+      <div style="display: flex; gap: 10px">
+        <a href="Collection.dc.html" style="height: 56px; padding: 0 22px; border-radius: 999px; background: #FFFFFF; color: #2A1450; font-weight: 700; font-size: 15px; text-decoration: none; display: flex; align-items: center">Back to Memes</a>
+        <button onClick="{{restart}}" style="height: 56px; padding: 0 22px; border-radius: 999px; border: 2px solid #FFFFFF; background: transparent; color: #FFFFFF; font: 700 15px 'DM Sans', sans-serif; cursor: pointer">Replay demo</button>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{doneSearch}}" hint-placeholder-val="{{false}}">
+    <div style="margin: 24px 16px 0 16px; border-radius: 40px; background: #2A1450; color: #FFFFFF; padding: 30px 26px; display: flex; flex-direction: column; gap: 16px">
+      <sc-if value="{{notYetDeleted}}" hint-placeholder-val="{{true}}">
+        <div style="display: flex; flex-direction: column; gap: 16px">
+          <div style="font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 46px; line-height: 0.95; letter-spacing: -1.8px">{{summaryTitle}}</div>
+          <div style="font-size: 15px; color: #E5D8FF">{{summaryText}}</div>
+          <button onClick="{{confirmDelete}}" style="height: 64px; border-radius: 999px; border: 0; background: #FF6B57; color: #3A0A00; font: 800 18px 'DM Sans', sans-serif; display: flex; align-items: center; justify-content: center; gap: 10px; cursor: pointer">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
+            {{deleteButtonLabel}}
+          </button>
+          <button onClick="{{restart}}" style="height: 52px; border-radius: 999px; border: 2px solid #FFFFFF; background: transparent; color: #FFFFFF; font: 700 15px 'DM Sans', sans-serif; cursor: pointer">Review again</button>
+        </div>
+      </sc-if>
+      <sc-if value="{{deletedDone}}" hint-placeholder-val="{{false}}">
+        <div style="display: flex; flex-direction: column; gap: 16px">
+          <div style="width: 72px; height: 72px; border-radius: 24px; background: #C6F24E; color: #1E2B00; display: flex; align-items: center; justify-content: center; transform: rotate(-8deg)">
+            <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>
+          </div>
+          <div style="font-family: 'Bricolage Grotesque', sans-serif; font-weight: 800; font-size: 46px; line-height: 0.95; letter-spacing: -1.8px">{{freedTitle}}</div>
+          <div style="font-size: 14px; color: #E5D8FF">In the app, Android shows its own confirmation before files are deleted.</div>
+          <button onClick="{{clear}}" style="height: 52px; border-radius: 999px; border: 0; background: #FFFFFF; color: #2A1450; font: 700 15px 'DM Sans', sans-serif; cursor: pointer">New search</button>
+        </div>
+      </sc-if>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{showToast}}" hint-placeholder-val="{{false}}">
+    <div role="status" style="position: absolute; left: 16px; right: 16px; bottom: 20px; height: 56px; border-radius: 18px; background: #2A1450; color: #FFFFFF; display: flex; align-items: center; justify-content: space-between; padding: 0 8px 0 18px; font-size: 15px">
+      <span>{{toast}}</span>
+      <button onClick="{{undo}}" style="height: 40px; padding: 0 16px; border-radius: 999px; border: 0; background: #C6F24E; color: #1E2B00; font: 700 14px 'DM Sans', sans-serif; cursor: pointer">Undo</button>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+var COLLECTION_CARDS = [
+  { date: 'Aug 22', match: 'Weak match', bg: '#FFF1C2', blob: '#FFB86B', shape: '999px', mb: 2.1 },
+  { date: 'Aug 14', match: 'Unsure', bg: '#E3F6EA', blob: '#6ED39C', shape: '28px', mb: 1.4 },
+  { date: 'Jul 30', match: 'Unsure', bg: '#F0E6FF', blob: '#B79CFF', shape: '999px 999px 24px 24px', mb: 3.0 },
+  { date: 'Jul 12', match: 'Fair match', bg: '#FFE0D1', blob: '#FF8A65', shape: '999px', mb: 0.9 },
+  { date: 'Jun 28', match: 'Fair match', bg: '#DCEBFF', blob: '#5AA2FF', shape: '28px', mb: 1.7 },
+  { date: 'Jun 03', match: 'Good match', bg: '#FFE6EF', blob: '#FF8FC7', shape: '999px 999px 24px 24px', mb: 2.4 }
+];
+var SEARCH_CARDS = [
+  { date: 'May 2025', match: 'Unsure', bg: '#EEF3FF', blob: '#8F6BFF', shape: '28px', mb: 1.8 },
+  { date: 'Apr 2025', match: 'Fair match', bg: '#F4F0FA', blob: '#5A33C9', shape: '999px', mb: 2.6 },
+  { date: 'Apr 2025', match: 'Fair match', bg: '#FFF4E3', blob: '#FFB86B', shape: '999px 999px 24px 24px', mb: 1.2 },
+  { date: 'Dec 2024', match: 'Strong match', bg: '#E5D8FF', blob: '#6B3FD4', shape: '28px', mb: 2.2 },
+  { date: 'Dec 2024', match: 'Strong match', bg: '#EEF3FF', blob: '#8F6BFF', shape: '999px', mb: 1.9 },
+  { date: 'Nov 2024', match: 'Strong match', bg: '#F4F0FA', blob: '#5A33C9', shape: '28px', mb: 3.1 },
+  { date: 'Nov 2024', match: 'Strong match', bg: '#FFF4E3', blob: '#FFB86B', shape: '999px 999px 24px 24px', mb: 2.0 }
+];
+var THRESHOLD = 110;
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { mode: 'collection', query: '', searched: '', idx: 0, dx: 0, dragging: false, flash: null, history: [], toast: '', deleted: false };
+    this.startX = 0;
+  }
+  cards() { return this.state.mode === 'search' ? SEARCH_CARDS : COLLECTION_CARDS; }
+  act(kind) {
+    var cards = this.cards();
+    var idx = this.state.idx;
+    if (idx >= cards.length) return;
+    var labels = { keep: 'Kept', remove: 'Removed from Memes', del: 'File deleted · ' + cards[idx].mb + ' MB freed', mark: 'Marked for deletion' };
+    this.setState({ idx: idx + 1, dx: 0, dragging: false, flash: kind, history: this.state.history.concat([kind]), toast: labels[kind] });
+    clearTimeout(this.flashTimer);
+    this.flashTimer = setTimeout(() => this.setState({ flash: null }), 380);
+    clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => this.setState({ toast: '' }), 2400);
+  }
+  startSearch(q) {
+    var text = (q || '').trim();
+    if (!text) return;
+    this.setState({ mode: 'search', query: text, searched: text, idx: 0, dx: 0, history: [], toast: '', flash: null, deleted: false });
+  }
+  componentWillUnmount() { clearTimeout(this.flashTimer); clearTimeout(this.toastTimer); }
+  renderVals() {
+    var s = this.state;
+    var self = this;
+    var inSearch = s.mode === 'search';
+    var cards = this.cards();
+    var n = cards.length;
+    var done = s.idx >= n;
+    var dx = s.dx;
+    var a = Math.min(Math.abs(dx) / 160, 1);
+    var bg = '#F3ECFF';
+    if (s.flash === 'keep') bg = '#D9F58A';
+    else if (s.flash === 'remove' || s.flash === 'mark') bg = '#FFB4A8';
+    else if (s.flash === 'del') bg = '#B9AED1';
+    else if (dx > 0) bg = 'rgba(198, 242, 78, ' + (0.15 + a * 0.7).toFixed(2) + ')';
+    else if (dx < 0) bg = 'rgba(255, 107, 87, ' + (0.12 + a * 0.6).toFixed(2) + ')';
+    var leftKind = inSearch ? 'mark' : 'remove';
+    var noop = function () {};
+    var stack = [];
+    for (var k = Math.min(n - 1, s.idx + 2); k >= s.idx; k--) {
+      var depth = k - s.idx;
+      var c = cards[k];
+      var top = depth === 0;
+      var tx = top ? dx : 0;
+      var rot = top ? dx / 16 : (depth === 1 ? -3 : 4);
+      var transition = top && s.dragging ? 'none' : 'transform 260ms cubic-bezier(0.2, 0.9, 0.3, 1.2)';
+      stack.push({
+        date: c.date, match: c.match,
+        style: 'position: absolute; inset: 0; box-sizing: border-box; padding: 12px; border-radius: 36px; background: #FFFFFF; box-shadow: 0 12px 30px rgba(42, 20, 80, ' + (top ? '0.22' : '0.10') + '); touch-action: none; user-select: none; cursor: ' + (top ? 'grab' : 'default') + '; transition: ' + transition + '; transform: translate(' + tx + 'px, ' + (depth * 18) + 'px) rotate(' + rot + 'deg) scale(' + (1 - depth * 0.05) + ');',
+        art: 'height: 400px; border-radius: 26px; background: ' + c.bg + '; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;',
+        blob: 'width: 140px; height: 140px; border-radius: ' + c.shape + '; background: ' + c.blob + ';',
+        keepStamp: 'position: absolute; top: 34px; left: 28px; padding: 6px 16px; border-radius: 14px; border: 4px solid #4C6B00; color: #4C6B00; background: rgba(198, 242, 78, 0.9); font-family: \'Bricolage Grotesque\', sans-serif; font-weight: 800; font-size: 30px; transform: rotate(-12deg); opacity: ' + (top && dx > 0 ? a : 0).toFixed(2) + ';',
+        leftStamp: 'position: absolute; top: 34px; right: 28px; padding: 6px 16px; border-radius: 14px; border: 4px solid #8A1C0B; color: #8A1C0B; background: rgba(255, 180, 168, 0.95); font-family: \'Bricolage Grotesque\', sans-serif; font-weight: 800; font-size: 30px; transform: rotate(12deg); opacity: ' + (top && dx < 0 ? a : 0).toFixed(2) + ';',
+        down: top ? function (e) { self.startX = e.clientX; if (e.currentTarget.setPointerCapture) e.currentTarget.setPointerCapture(e.pointerId); self.setState({ dragging: true }); } : noop,
+        move: top ? function (e) { if (self.state.dragging) self.setState({ dx: e.clientX - self.startX }); } : noop,
+        up: top ? function () {
+          if (!self.state.dragging) return;
+          var d = self.state.dx;
+          if (d > THRESHOLD) self.act('keep');
+          else if (d < -THRESHOLD) self.act(leftKind);
+          else self.setState({ dx: 0, dragging: false });
+        } : noop
+      });
+    }
+    var hist = s.history;
+    var count = function (kind) { return hist.filter(function (h) { return h === kind; }).length; };
+    var markedIdx = [];
+    hist.forEach(function (h, i) { if (h === 'mark') markedIdx.push(i); });
+    var markedMb = markedIdx.reduce(function (sum, i) { return sum + SEARCH_CARDS[i].mb; }, 0);
+    var remaining = n - s.idx;
+    var restStrong = inSearch && !done && s.idx >= 3 && cards.slice(s.idx).every(function (c) { return c.match === 'Strong match'; });
+    var marked = count('mark');
+    var suggestions = ['old exam papers', 'OTP and codes', 'blurry photos'].map(function (q) {
+      return { label: q, pick: function () { self.startSearch(q); } };
+    });
+    return {
+      rootStyle: 'width: 390px; height: 844px; position: relative; overflow: hidden; font-family: \'DM Sans\', sans-serif; color: #1E1530; transition: background 220ms; background: ' + bg + ';',
+      query: s.query,
+      typed: function (e) { self.setState({ query: e.target.value }); },
+      submit: function (e) { if (e && e.preventDefault) e.preventDefault(); self.startSearch(self.state.query); },
+      clear: function () { self.setState({ mode: 'collection', query: '', searched: '', idx: 0, dx: 0, history: [], toast: '', flash: null, deleted: false }); },
+      inSearch: inSearch,
+      inCollection: !inSearch,
+      showSuggestions: !inSearch,
+      suggestions: suggestions,
+      contextLabel: inSearch ? n + ' matches for “' + s.searched + '” · least sure first' : 'Memes · least sure first',
+      progressLabel: Math.min(s.idx + 1, n) + ' of ' + n,
+      progressStyle: 'height: 14px; border-radius: 999px; background: ' + (inSearch ? '#FF6B57' : '#6B3FD4') + '; transition: width 300ms; width: ' + Math.round((s.idx / n) * 100) + '%;',
+      active: !done,
+      doneCollection: done && !inSearch,
+      doneSearch: done && inSearch,
+      stack: stack,
+      leftWord: inSearch ? 'DELETE' : 'REMOVE',
+      leftAria: inSearch ? 'Mark for deletion' : 'Remove from Memes',
+      left: function () { self.act(leftKind); },
+      keep: function () { self.act('keep'); },
+      deleteFile: function () { self.act('del'); },
+      showMarkRest: restStrong,
+      markRestLabel: 'Mark remaining ' + remaining + ' strong matches',
+      markRest: function () {
+        var extra = [];
+        for (var i = self.state.idx; i < n; i++) extra.push('mark');
+        self.setState({ idx: n, history: self.state.history.concat(extra), toast: '', flash: 'mark' });
+      },
+      markedLabel: marked + ' marked',
+      undo: function () {
+        if (self.state.idx === 0) return;
+        self.setState({ idx: self.state.idx - 1, history: self.state.history.slice(0, -1), toast: '', flash: null });
+      },
+      restart: function () { self.setState({ idx: 0, dx: 0, history: [], toast: '', flash: null, deleted: false }); },
+      showToast: s.toast !== '' && !done,
+      toast: s.toast,
+      keptLabel: count('keep') + ' kept',
+      removedLabel: count('remove') + ' removed',
+      deletedLabel: count('del') + ' deleted',
+      notYetDeleted: !s.deleted,
+      deletedDone: s.deleted,
+      summaryTitle: marked > 0 ? 'Delete ' + marked + ' files?' : 'Nothing marked',
+      summaryText: marked > 0 ? count('keep') + ' kept · ' + markedMb.toFixed(1) + ' MB will be freed' : 'You kept every match.',
+      deleteButtonLabel: 'Delete ' + marked + ' files · ' + markedMb.toFixed(1) + ' MB',
+      confirmDelete: function () { if (marked > 0) self.setState({ deleted: true }); },
+      freedTitle: markedMb.toFixed(1) + ' MB freed!'
+    };
+  }
+}
+</script>
+</body>
+</html>
