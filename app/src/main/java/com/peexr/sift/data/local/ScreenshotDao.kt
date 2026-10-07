@@ -18,9 +18,11 @@ interface ScreenshotDao {
     @Query("SELECT * FROM screenshots WHERE id = :id")
     suspend fun getScreenshotById(id: Long): ScreenshotEntity?
 
-    // Relies on PRAGMA recursive_triggers = ON for FTS sync on REPLACE conflict
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertScreenshots(screenshots: List<ScreenshotEntity>)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertNewScreenshots(screenshots: List<ScreenshotEntity>)
+
+    @Query("SELECT id FROM screenshots")
+    suspend fun getAllScreenshotIds(): List<Long>
 
     @Query("UPDATE screenshots SET embedding = :embedding WHERE id = :id")
     suspend fun updateEmbedding(id: Long, embedding: ByteArray)
@@ -30,6 +32,9 @@ interface ScreenshotDao {
 
     @Query("SELECT id, uri FROM screenshots WHERE embedding IS NULL")
     suspend fun getScreenshotsNeedingEmbedding(): List<ScreenshotUriRow>
+
+    @Query("SELECT id, uri, isProcessed, (embedding IS NULL) AS needsEmbedding FROM screenshots WHERE isProcessed = 0 OR embedding IS NULL ORDER BY dateAdded DESC")
+    suspend fun getScreenshotsNeedingIndexing(): List<IndexingRow>
 
     @Query("SELECT * FROM screenshots WHERE id IN (:ids)")
     suspend fun getScreenshotsByIds(ids: List<Long>): List<ScreenshotEntity>

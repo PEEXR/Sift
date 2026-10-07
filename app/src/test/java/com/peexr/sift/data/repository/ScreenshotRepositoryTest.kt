@@ -201,4 +201,65 @@ class ScreenshotRepositoryTest {
 
         assertTrue(results.isEmpty())
     }
+
+    @Test
+    fun computeStaleIds_emptyDb_returnsEmpty() {
+        val staleWithMedia = computeStaleIds(dbIds = emptyList(), mediaIds = listOf(1L, 2L, 3L))
+        assertTrue(staleWithMedia.isEmpty())
+
+        val staleEmptyBoth = computeStaleIds(dbIds = emptyList(), mediaIds = emptyList())
+        assertTrue(staleEmptyBoth.isEmpty())
+    }
+
+    @Test
+    fun computeStaleIds_emptyMedia_returnsAllDbIds() {
+        val dbIds = listOf(10L, 20L, 30L)
+        val stale = computeStaleIds(dbIds = dbIds, mediaIds = emptyList())
+        assertEquals(listOf(10L, 20L, 30L), stale)
+    }
+
+    @Test
+    fun computeStaleIds_overlap_returnsOnlyStaleDbIds() {
+        val dbIds = listOf(1L, 2L, 3L, 4L)
+        val mediaIds = listOf(2L, 4L, 5L)
+        val stale = computeStaleIds(dbIds = dbIds, mediaIds = mediaIds)
+        assertEquals(listOf(1L, 3L), stale)
+
+        // When all DB IDs exist in MediaStore, stale should be empty
+        val allPresent = computeStaleIds(dbIds = listOf(1L, 2L), mediaIds = listOf(1L, 2L, 3L))
+        assertTrue(allPresent.isEmpty())
+    }
+
+    @Test
+    fun computeStaleIds_allStale_returnsAllDbIds() {
+        val dbIds = listOf(100L, 200L, 300L)
+        val mediaIds = listOf(400L, 500L)
+        val stale = computeStaleIds(dbIds = dbIds, mediaIds = mediaIds)
+        assertEquals(listOf(100L, 200L, 300L), stale)
+    }
+
+    @Test
+    fun computeStaleIds_duplicates_handlesDuplicatesCorrectly() {
+        // Duplicate MediaStore IDs should not affect stale determination
+        val staleDupMedia = computeStaleIds(
+            dbIds = listOf(1L, 2L, 3L),
+            mediaIds = listOf(2L, 2L, 2L)
+        )
+        assertEquals(listOf(1L, 3L), staleDupMedia)
+
+        // Duplicate DB IDs should be deduplicated
+        val staleDupDb = computeStaleIds(
+            dbIds = listOf(1L, 1L, 2L, 3L, 3L),
+            mediaIds = listOf(2L)
+        )
+        assertEquals(listOf(1L, 3L), staleDupDb)
+
+        // Duplicates on both sides
+        val staleDupBoth = computeStaleIds(
+            dbIds = listOf(1L, 1L, 2L, 2L, 3L),
+            mediaIds = listOf(2L, 2L)
+        )
+        assertEquals(listOf(1L, 3L), staleDupBoth)
+    }
 }
+

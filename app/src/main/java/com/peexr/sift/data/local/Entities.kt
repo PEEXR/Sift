@@ -90,6 +90,13 @@ data class ScreenshotUriRow(
     val uri: String
 )
 
+data class IndexingRow(
+    val id: Long,
+    val uri: String,
+    val isProcessed: Boolean,
+    val needsEmbedding: Boolean
+)
+
 @Entity(tableName = "collections")
 data class CollectionEntity(
     @PrimaryKey val id: String,

@@ -80,23 +80,25 @@ class ScreenshotRepository(
         val selectionArgs = arrayOf("%screenshot%", "%Screenshots%")
         val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
 
-        contentResolver.query(
+        val cursor = contentResolver.query(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             projection,
             selection,
             selectionArgs,
             sortOrder
-        )?.use { cursor ->
-            val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-            val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
-            val dateColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
-            val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
+        ) ?: return@withContext 0
 
-            while (cursor.moveToNext()) {
-                val id = cursor.getLong(idColumn)
-                val name = cursor.getString(nameColumn) ?: "screenshot_$id.png"
-                val date = cursor.getLong(dateColumn)
-                val size = cursor.getLong(sizeColumn)
+        cursor.use {
+            val idColumn = it.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+            val nameColumn = it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+            val dateColumn = it.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
+            val sizeColumn = it.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
+
+            while (it.moveToNext()) {
+                val id = it.getLong(idColumn)
+                val name = it.getString(nameColumn) ?: "screenshot_$id.png"
+                val date = it.getLong(dateColumn)
+                val size = it.getLong(sizeColumn)
                 val contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
 
                 screenshots.add(
@@ -112,8 +114,20 @@ class ScreenshotRepository(
         }
 
         if (screenshots.isNotEmpty()) {
-            dao.insertScreenshots(screenshots)
+            dao.insertNewScreenshots(screenshots)
         }
+
+        val dbIds = dao.getAllScreenshotIds()
+        val mediaIds = screenshots.map { it.id }
+        val staleIds = computeStaleIds(dbIds, mediaIds)
+        // An empty result usually means lost/partial media access, not that every screenshot was deleted;
+        // never wipe the whole index (OCR + embeddings) on that basis
+        if (staleIds.isNotEmpty() && mediaIds.isNotEmpty()) {
+            staleIds.chunked(500).forEach { chunk ->
+                dao.deleteScreenshots(chunk)
+            }
+        }
+
         screenshots.size
     }
 
@@ -357,4 +371,16 @@ class ScreenshotRepository(
             junkRationale = junkRationale
         )
     }
+}
+
+/**
+ * Computes the list of database screenshot IDs that are no longer present in MediaStore.
+ *
+ * @param dbIds Current screenshot IDs existing in the local database.
+ * @param mediaIds Screenshot IDs currently discovered in MediaStore.
+ * @return List of stale IDs that should be removed from the local database.
+ */
+fun computeStaleIds(dbIds: Collection<Long>, mediaIds: Collection<Long>): List<Long> {
+    val mediaSet = if (mediaIds is Set) mediaIds else mediaIds.toHashSet()
+    return dbIds.filter { it !in mediaSet }.distinct()
 }

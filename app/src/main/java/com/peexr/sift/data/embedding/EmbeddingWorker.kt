@@ -18,19 +18,21 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.peexr.sift.SiftApplication
+import com.peexr.sift.data.local.IndexingRow
 import com.peexr.sift.data.search.toByteArray
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Background worker that iterates through screenshots missing an embedding vector,
- * generates a 128-d multimodal embedding for each via [EmbeddingEngine], and stores it
- * in the Room database via [ScreenshotDao.updateEmbedding].
+ * Background worker that performs unified on-device indexing (OCR text recognition and multimodal embeddings)
+ * for screenshots.
  *
- * Runs only when the model is in [ModelState.Ready] (skips cleanly with [Result.success] otherwise).
+ * Runs ML Kit OCR on unprocessed screenshots regardless of model status, and generates 128-d multimodal
+ * embeddings via [EmbeddingEngine] when the model is in [ModelState.Ready] or installed.
+ *
  * Checks cancellation/[isStopped] between items, and handles per-item exceptions gracefully so
- * that a single corrupted or unreadable screenshot does not fail the entire batch.
+ * that a single corrupted or unreadable screenshot does not fail the entire indexing run.
  */
 class EmbeddingWorker(
     appContext: Context,
@@ -107,25 +109,27 @@ class EmbeddingWorker(
         }
 
         val modelStore = app.modelStore
-        val isReady = modelStore.state.value is ModelState.Ready || modelStore.isInstalled()
-        if (!isReady) {
-            Log.i(TAG, "Embedding model is not ready. Skipping indexing work.")
-            return@withContext Result.success()
-        }
+        val canEmbed = modelStore.state.value is ModelState.Ready || modelStore.isInstalled()
 
         val database = app.database
         val dao = database.screenshotDao()
-        val embeddingEngine = app.embeddingEngine
 
-        val pending = dao.getScreenshotsNeedingEmbedding()
-        if (pending.isEmpty()) {
-            Log.d(TAG, "No screenshots requiring embedding.")
+        val pending = dao.getScreenshotsNeedingIndexing()
+        val itemsToProcess = if (canEmbed) {
+            pending
+        } else {
+            pending.filter { !it.isProcessed }
+        }
+
+        if (itemsToProcess.isEmpty()) {
+            Log.d(TAG, "No screenshots requiring indexing work (canEmbed=$canEmbed).")
             return@withContext Result.success()
         }
 
-        val total = pending.size
+        val embeddingEngine = if (canEmbed) app.embeddingEngine else null
+        val total = itemsToProcess.size
         var processed = 0
-        Log.i(TAG, "Beginning background embedding for $total screenshots.")
+        Log.i(TAG, "Beginning background indexing for $total screenshots (canEmbed=$canEmbed).")
 
         try {
             setForeground(createForegroundInfo(0, total))
@@ -135,7 +139,7 @@ class EmbeddingWorker(
             Log.w(TAG, "Could not start foreground service; continuing indexing best-effort in background", e)
         }
 
-        for (batch in pending.chunked(BATCH_SIZE)) {
+        for (batch in itemsToProcess.chunked(BATCH_SIZE)) {
             if (isStopped) {
                 Log.i(TAG, "Worker stopped before batch, requesting retry.")
                 return@withContext Result.retry()
@@ -147,18 +151,40 @@ class EmbeddingWorker(
                     return@withContext Result.retry()
                 }
 
-                try {
-                    val uri = Uri.parse(item.uri)
-                    val embedding = embeddingEngine.embedImage(uri)
-                    if (embedding != null) {
-                        dao.updateEmbedding(item.id, embedding.toByteArray())
-                    } else {
-                        Log.w(TAG, "Could not compute embedding for screenshot id=${item.id}")
+                val uri = Uri.parse(item.uri)
+
+                // 1. ML Kit OCR & perception if not already processed
+                if (!item.isProcessed) {
+                    try {
+                        val perceptionResult = app.perceptionEngine.analyzeImage(uri)
+                        if (perceptionResult.isSuccess) {
+                            val perception = perceptionResult.getOrNull()!!
+                            val labelsJson = perception.visualLabels.joinToString(",")
+                            dao.updatePerception(item.id, perception.ocrText, labelsJson)
+                        } else {
+                            Log.w(TAG, "Perception analysis failed for screenshot id=${item.id}", perceptionResult.exceptionOrNull())
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error running perception for screenshot id=${item.id}", e)
                     }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error generating embedding for screenshot id=${item.id}", e)
+                }
+
+                // 2. Multimodal embedding if needed and model is ready
+                if (item.needsEmbedding && canEmbed && embeddingEngine != null) {
+                    try {
+                        val embedding = embeddingEngine.embedImage(uri)
+                        if (embedding != null) {
+                            dao.updateEmbedding(item.id, embedding.toByteArray())
+                        } else {
+                            Log.w(TAG, "Could not compute embedding for screenshot id=${item.id}")
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error generating embedding for screenshot id=${item.id}", e)
+                    }
                 }
 
                 processed++
@@ -182,7 +208,7 @@ class EmbeddingWorker(
             }
         }
 
-        Log.i(TAG, "Finished background embedding indexing ($processed/$total processed).")
+        Log.i(TAG, "Finished background indexing ($processed/$total processed).")
         Result.success()
     }
 }
