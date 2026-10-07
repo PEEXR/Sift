@@ -84,6 +84,9 @@ class ScreenshotRepository(
     val junkCountFlow: Flow<Int> = dao.getJunkCountFlow()
     val recoverableBytesFlow: Flow<Long> = dao.getRecoverableBytesFlow().map { it ?: 0L }
 
+    val countNeedingIndexingFlow: Flow<Int> = dao.countNeedingIndexingFlow()
+    val countAllFlow: Flow<Int> = dao.countAllFlow()
+
     suspend fun syncMediaStoreScreenshots(): Int = withContext(Dispatchers.IO) {
         val screenshots = mutableListOf<ScreenshotEntity>()
         val projection = arrayOf(
@@ -507,6 +510,10 @@ class ScreenshotRepository(
             junkConfidence = junkConfidence,
             junkRationale = junkRationale
         )
+    }
+
+    suspend fun mapToDomainModel(entities: List<ScreenshotEntity>): List<ScreenshotItem> = withContext(Dispatchers.IO) {
+        entities.map { it.toDomainModel() }
     }
 }
 

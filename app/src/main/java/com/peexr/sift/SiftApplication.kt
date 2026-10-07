@@ -1,16 +1,44 @@
 package com.peexr.sift
 
 import android.app.Application
+import android.util.Log
 import com.peexr.sift.data.api.JevApiClient
 import com.peexr.sift.data.embedding.EmbeddingEngine
 import com.peexr.sift.data.embedding.EmbeddingScheduler
+import com.peexr.sift.data.embedding.ModelDownloader
 import com.peexr.sift.data.embedding.ModelStore
 import com.peexr.sift.data.local.AppDatabase
 import com.peexr.sift.data.local.SettingsManager
 import com.peexr.sift.data.perception.PerceptionEngine
 import com.peexr.sift.data.repository.ScreenshotRepository
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import okhttp3.OkHttpClient
 
 class SiftApplication : Application() {
+
+    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    private var downloadJob: Job? = null
+
+    fun startModelDownload() {
+        synchronized(this) {
+            if (downloadJob?.isActive == true) return
+            downloadJob = appScope.launch {
+                try {
+                    ModelDownloader(modelStore, OkHttpClient()).downloadModels(wifiOnly = false)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    Log.e("SiftApplication", "Model download failed", t)
+                }
+            }
+        }
+    }
 
     lateinit var database: AppDatabase
         private set

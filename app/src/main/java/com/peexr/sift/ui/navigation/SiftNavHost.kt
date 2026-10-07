@@ -17,6 +17,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -27,15 +28,18 @@ import com.peexr.sift.ui.cleanup.CleanupViewModel
 import com.peexr.sift.ui.collections.CollectionsListScreen
 import com.peexr.sift.ui.collections.CollectionsScreen
 import com.peexr.sift.ui.collections.CollectionsViewModel
+import com.peexr.sift.ui.library.LibraryRoute
+import com.peexr.sift.ui.library.LibraryViewModel
 import com.peexr.sift.ui.settings.SettingsDialog
 import com.peexr.sift.ui.theme.SiftTheme
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SiftMainApp(
-    collectionsViewModel: CollectionsViewModel,
+    libraryViewModel: LibraryViewModel,
     cleanupViewModel: CleanupViewModel,
-    settingsManager: SettingsManager
+    settingsManager: SettingsManager,
+    collectionsViewModel: CollectionsViewModel? = null
 ) {
     var currentDestination by remember { mutableStateOf<SiftDestination>(SiftDestination.Library) }
     var showSettingsDialog by remember { mutableStateOf(false) }
@@ -47,25 +51,8 @@ fun SiftMainApp(
     )
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = "Sift",
-                        style = MaterialTheme.typography.titleLarge
-                    )
-                },
-                actions = {
-                    IconButton(onClick = { showSettingsDialog = true }) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    titleContentColor = SiftTheme.extended.displayInk
-                )
-            )
-        }
+        containerColor = MaterialTheme.colorScheme.background,
+        contentWindowInsets = WindowInsets(0, 0, 0, 0)
     ) { padding ->
         Box(
             modifier = Modifier
@@ -79,7 +66,10 @@ fun SiftMainApp(
             ) { destination ->
                 when (destination) {
                     is SiftDestination.Library -> {
-                        CollectionsScreen(viewModel = collectionsViewModel)
+                        LibraryRoute(
+                            viewModel = libraryViewModel,
+                            onOpenSettings = { showSettingsDialog = true }
+                        )
                     }
                     is SiftDestination.Collections -> {
                         CollectionsListScreen()

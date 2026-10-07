@@ -15,6 +15,12 @@ interface ScreenshotDao {
     @Query("SELECT * FROM screenshots ORDER BY dateAdded DESC")
     fun getAllScreenshotsFlow(): Flow<List<ScreenshotEntity>>
 
+    @Query("SELECT COUNT(*) FROM screenshots WHERE isProcessed = 0 OR embedding IS NULL")
+    fun countNeedingIndexingFlow(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM screenshots")
+    fun countAllFlow(): Flow<Int>
+
     @Query("SELECT * FROM screenshots WHERE id = :id")
     suspend fun getScreenshotById(id: Long): ScreenshotEntity?
 

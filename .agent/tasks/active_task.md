@@ -6,35 +6,41 @@ Source RFC: `docs/RFC_LOCAL_AI_STACK.md` (Phase 2, adapted: **ONNX Runtime inste
 
 **EXECUTION RULE (hard): Do NOT run Gradle, adb, tests, or ANY long-running/background command. Only read files and edit/create files. The orchestrator builds and tests. Finish your turn promptly with a summary.**
 
-## THIS DISPATCH = UI Stage 1: Expressive theme foundation + floating pill navigation
+## THIS DISPATCH = UI Stage 2: the Library screen
 
-Read FIRST: `docs/design/SIFT_UI_SPEC.md` (source of truth) and the mock markup in `docs/design/mock/` (`Main.dc.html` shows the nav pill, header, search pill and colors). Library versions are already upgraded (material3 1.5.0-alpha18, Compose BOM 2026.06.01): do NOT change any dependency or build file.
+Read FIRST: `docs/design/SIFT_UI_SPEC.md` (section "Library") and `docs/design/mock/Main.dc.html`. Theme, fonts and the floating pill nav already exist (`ui/theme/*`, `ui/navigation/FloatingPillNav.kt` with `FloatingNavClearance`). Do NOT change dependencies or build files.
 
-Scope of THIS stage: theme + navigation shell only. Screens get rebuilt in later stages; here they must just compile, use the new theme, and lose obsolete bits.
+### Files
+- NEW `app/src/main/java/com/peexr/sift/ui/library/LibraryScreen.kt` and `LibraryViewModel.kt` (+ `LibraryViewModel.Factory` like `CollectionsViewModel.Factory`).
+- `ui/navigation/SiftNavHost.kt`: the Library destination renders `LibraryScreen` (instead of `CollectionsScreen`). Keep `CollectionsScreen.kt` file in the project (it is replaced in the next stage) but it no longer needs to be reachable.
+- `MainActivity.kt`: keep the existing permission request + sync-on-launch, but route it through the new `LibraryViewModel.syncScreenshots()` if CollectionsViewModel is no longer used there (keep it working either way).
+- `SiftApplication.kt`: add `val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)` and `fun startModelDownload()` that launches (once; ignore if already running) `ModelDownloader(modelStore, OkHttpClient()).downloadModels(wifiOnly = false)` in `appScope`, catching and logging non-cancellation exceptions (setting `ModelState.Failed` is already the downloader's job — read `ModelDownloader.kt`/`ModelStore.kt`).
+- `data/local/ScreenshotDao.kt`: add `@Query("SELECT COUNT(*) FROM screenshots WHERE isProcessed = 0 OR embedding IS NULL") fun countNeedingIndexingFlow(): Flow<Int>` and `@Query("SELECT COUNT(*) FROM screenshots") fun countAllFlow(): Flow<Int>`; expose both from `ScreenshotRepository` as flows.
 
-### 1. Theme — `app/src/main/java/com/peexr/sift/ui/theme/`
-- `Color.kt`: replace the palette with the spec's tokens (light + a matching dark scheme as described in the spec). Name them by role (e.g. `SiftViolet`, `SiftInk`, `SiftDisplayInk`, `KeepLime`, `OnKeepLime`, `RemoveCoral`, `OnRemoveCoral`, `InverseSurface`...). Also add the six collection tonal pairs as a `val CollectionPalette: List<Pair<Color, Color>>` (container, ink) in the spec's order.
-- Extra tokens the M3 scheme has no slot for (display ink, keep/remove accents, collection palette) go in an `@Immutable data class SiftExtendedColors` provided via `staticCompositionLocalOf` + accessor `SiftTheme.extended` (an `object SiftTheme { val extended: SiftExtendedColors @Composable get() = ... }`).
-- `Type.kt`: `val BricolageGrotesque = FontFamily(Font(R.font.bricolage_grotesque, FontWeight.ExtraBold, variationSettings = FontVariation.Settings(FontVariation.weight(800))), Font(R.font.bricolage_grotesque, FontWeight.SemiBold, variationSettings = FontVariation.Settings(FontVariation.weight(600))))` and `val DmSans = FontFamily(` 400/500/700 the same way `)` (use `@OptIn(ExperimentalTextApi::class)` if the compiler requires it). Typography: display*/headline* = BricolageGrotesque ExtraBold with negative letterSpacing (displayLarge 64.sp/line 61.sp/−2.5.sp, displayMedium 56.sp, displaySmall 44.sp, headlineLarge 34.sp/−1.sp, headlineMedium 28.sp/−0.8.sp, headlineSmall 22.sp); title*/body*/label* = DmSans (titleLarge 20.sp Bold, titleMedium 16.sp Bold, bodyLarge 16.sp, bodyMedium 15.sp, bodySmall 13.sp, labelLarge 15.sp Bold, labelMedium 14.sp Bold, labelSmall 12.sp Medium). No `FontFamily.Default` anywhere.
-- `Shape.kt`: extraSmall 8.dp, small 14.dp, medium 18.dp, large 28.dp, extraLarge 36.dp (RoundedCornerShape).
-- `Theme.kt`: `SiftTheme(darkTheme, content)` uses `MaterialExpressiveTheme(colorScheme, motionScheme = MotionScheme.expressive(), shapes, typography)`. Dynamic color OFF (remove the dynamicColor path). Edge-to-edge friendly (no hard-coded status bar color writes; keep what MainActivity needs to compile).
+### LibraryViewModel (UDF; expose one `StateFlow<LibraryUiState>`)
+- `LibraryUiState(totalCount, sections: List<LibrarySection>, query, searchResults: List<ScreenshotItem>?, isSearching, indexing: IndexingUi, isRefreshing)`. `LibrarySection(title: String, items: List<ScreenshotItem>)`.
+- Sections from `repository.allScreenshotsFlow` grouped by `dateAdded` (seconds since epoch, device time zone): "Today", "Yesterday", "This week" (rest of the last 7 days), "Last week" (8–14 days), then one per month "August 2026" (newest first). Put the grouping in a pure top-level function `groupByDate(items: List<ScreenshotItem>, now: java.time.ZonedDateTime): List<LibrarySection>` so it is unit-testable.
+- Search: `onQueryChange(q)` updates `query`; debounce 250 ms; blank -> `searchResults = null`; otherwise `repository.hybridSearch(q, limit = 100)` (returns entities — map to `ScreenshotItem` the same way the repository does; add a small public mapping helper to the repository if needed). `isSearching` while running. Cancel previous search on new input (use `flatMapLatest`/`mapLatest`). Rethrow CancellationException.
+- `IndexingUi` sealed: `Hidden` (nothing pending AND model ready), `NeedsModel(sizeMb = 316)`, `Downloading(fraction: Float)`, `ModelFailed(message)`, `Pending(remaining: Int)` (model ready, work pending, not running), `Running(done: Int, total: Int, remaining: Int)`. Sources: `modelStore.state`, `countNeedingIndexingFlow()`, and WorkManager `getWorkInfosForUniqueWorkFlow(EmbeddingScheduler.UNIQUE_WORK_NAME)` progress (`EmbeddingWorker.KEY_CURRENT`/`KEY_TOTAL`). ETA text = remaining × 11 s, formatted like "about 1 h 40 min" / "about 12 min" / "less than a minute" (pure function `formatEta(seconds: Long): String`, unit-tested).
+- Actions: `startIndexing()` -> `EmbeddingScheduler.enqueueIndexingNow(context)`; `downloadModel()` -> `app.startModelDownload()`; `refresh()` -> `syncScreenshots()` (sets `isRefreshing`).
 
-### 2. Navigation — `ui/navigation/SiftDestination.kt`, `SiftNavHost.kt`
-- Destinations: `Library` (route "library", existing `CollectionsScreen` content for now), `Collections` (route "collections", NEW placeholder screen `ui/collections/CollectionsListScreen.kt` showing the 58sp "Collections" title + "Coming next" body text, themed), `Review` (route "review", existing `CleanupScreen` for now). Start destination = Library. Icons: rounded Material icons (GridView / CollectionsBookmark or FolderSpecial / Style or SwipeLeft — pick close equivalents from material-icons-extended).
-- Replace the full-width `NavigationBar` with a custom **floating pill nav** composable `ui/navigation/FloatingPillNav.kt`: Row in a `Surface(shape = CircleShape, color = surfaceContainerHighest, shadowElevation = 6.dp)`, 6.dp padding, 4.dp spacing, centered, 22.dp above the bottom + navigation bar insets (`WindowInsets.navigationBars`). Selected item: primary pill (52.dp tall, 20.dp horizontal padding) with icon + label (labelLarge, onPrimary); unselected: 52.dp circle icon button (onSurfaceVariant) with contentDescription. Animate width/colors with `animateContentSize()` + `animateColorAsState` using `MaterialTheme.motionScheme` specs where available. The pill overlays content (screens must add bottom padding ≈ 100.dp so content isn't hidden — expose `val FloatingNavClearance = 100.dp`).
-- Remove the old `Scaffold` bottomBar usage accordingly (keep a Scaffold if useful for snackbars).
+### LibraryScreen (match the mock; use theme tokens only)
+- Edge-to-edge; content padded by status bar insets; bottom padding `FloatingNavClearance`.
+- Header row: "Library" in `displayLarge` (color `SiftTheme.extended` display ink) + caption "N screenshots" (bodyMedium, onSurfaceVariant); right: 52 dp circular settings `FilledTonalIconButton` (surfaceContainerHigh) opening the existing `SettingsDialog`.
+- Search pill: 58 dp tall, `CircleShape`, surfaceContainerHigh, leading search icon, placeholder "Search your screenshots", single line, IME action Search, trailing clear (×) button when non-empty. NO mic button (voice search isn't implemented).
+- Indexing card under the search (only when not `Hidden`), primaryContainer, `shapes.large`, matching the mock: 44 dp primary rounded icon tile, title + body line, thick 12 dp rounded progress bar, and one action button per state: NeedsModel -> "Download 316 MB" (subtitle "Needed once for smart search and auto-filling collections"); Downloading -> progress + "Downloading model…"; ModelFailed -> message + "Retry"; Pending -> "Index now" (subtitle "N screenshots waiting · keep Sift open · about X"); Running -> "Indexing done of total" + "Keep Sift open · about X left" (no button).
+- Grid: `LazyVerticalGrid(GridCells.Fixed(3))`, 6 dp spacing, 16 dp side padding; section headers span the full row (`GridItemSpan(maxLineSpan)`): title `headlineMedium` (display ink) + item count at the end. Tiles: Coil `AsyncImage` with `ContentScale.Crop`, `aspectRatio(0.62f)`, `shapes.medium` (18 dp) clip, surfaceContainer placeholder color. NO filenames, NO label chips. Tile tap opens the image in the system viewer (`Intent.ACTION_VIEW` with the content uri, `FLAG_GRANT_READ_URI_PERMISSION`). Content descriptions: "Screenshot from <date>".
+- Search mode: replace sections with a header "N results for “q”" and the same tile grid; while searching show an expressive `LoadingIndicator` (opt-in `ExperimentalMaterial3ExpressiveApi`); empty -> centered message "No matches. Try different words." If the model isn't ready, show a small hint under the header "Text-only results until smart search is set up".
+- Pull to refresh: `PullToRefreshBox` around the grid calling `refresh()` (re-scans the gallery).
+- Status messages from sync use a Snackbar styled with inverseSurface (default M3 snackbar is fine) — not a white card.
 
-### 3. Remove obsolete UI (the user dropped Jev/Laya)
-- In `CollectionsScreen.kt`: delete the "Jev Auto-Tag" extended FAB and any UI text mentioning Jev; the create-collection dialog text becomes: title "New collection", fields "Name" and "Description" with supporting text "Screenshots matching this description are added automatically." Keep the sync FAB for now.
-- Do NOT delete Jev data/API classes or ViewModel methods in this stage (only the UI entry points). If a ViewModel method becomes unused, leave it.
+### Tests (JVM)
+- `app/src/test/java/com/peexr/sift/ui/library/LibraryLogicTest.kt`: `groupByDate` (today/yesterday/this week/last week/month buckets, ordering, empty), `formatEta` cases.
 
 ### Constraints
-- Use `MaterialTheme.colorScheme/typography/shapes` and `SiftTheme.extended` — no raw `Color(0x...)` in screen files (only in Color.kt). No hard-coded font families outside Type.kt.
-- Keep all existing features compiling and working (search, sync, collections dialog, cleanup).
-- Do NOT run Gradle or any command (orchestrator builds). Do not touch data/, build files, docs/, or tests unless a test breaks from a rename.
-
-### Acceptance
-- App compiles; launches on Library with the floating pill nav; switching tabs works; fonts are Bricolage Grotesque/DM Sans; palette is violet/lilac per spec; no Jev button.
+- Network/disk on Dispatchers.IO, never swallow CancellationException, immutable StateFlow, stateless composable leaves (screen takes state + lambdas; a thin `LibraryRoute` composable wires the ViewModel).
+- Theme tokens only: no raw `Color(0x…)`, no font families outside `ui/theme`.
+- Do NOT run Gradle or any command; the orchestrator builds and tests.
 
 ---
 BACKGROUND REFERENCE (previous stages, do not act on it):

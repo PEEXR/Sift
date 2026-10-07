@@ -12,6 +12,7 @@ import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
 import com.peexr.sift.ui.cleanup.CleanupViewModel
 import com.peexr.sift.ui.collections.CollectionsViewModel
+import com.peexr.sift.ui.library.LibraryViewModel
 import com.peexr.sift.ui.navigation.SiftMainApp
 import com.peexr.sift.ui.theme.SiftTheme
 
@@ -22,8 +23,15 @@ class MainActivity : ComponentActivity() {
     ) { permissions ->
         val granted = permissions.entries.any { it.value }
         if (granted) {
-            collectionsViewModel.syncScreenshots()
+            libraryViewModel.syncScreenshots()
         }
+    }
+
+    private val libraryViewModel: LibraryViewModel by viewModels {
+        LibraryViewModel.Factory(
+            repository = (application as SiftApplication).repository,
+            app = application as SiftApplication
+        )
     }
 
     private val collectionsViewModel: CollectionsViewModel by viewModels {
@@ -43,9 +51,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             SiftTheme {
                 SiftMainApp(
-                    collectionsViewModel = collectionsViewModel,
+                    libraryViewModel = libraryViewModel,
                     cleanupViewModel = cleanupViewModel,
-                    settingsManager = app.settingsManager
+                    settingsManager = app.settingsManager,
+                    collectionsViewModel = collectionsViewModel
                 )
             }
         }
@@ -65,7 +74,7 @@ class MainActivity : ComponentActivity() {
         }
 
         if (needed.isEmpty()) {
-            collectionsViewModel.syncScreenshots()
+            libraryViewModel.syncScreenshots()
         } else {
             permissionLauncher.launch(needed.toTypedArray())
         }
