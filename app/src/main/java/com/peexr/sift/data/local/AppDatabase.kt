@@ -6,6 +6,7 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 import androidx.sqlite.db.SupportSQLiteDatabase
+import io.requery.android.database.sqlite.RequerySQLiteOpenHelperFactory
 
 @Database(
     entities = [
@@ -30,6 +31,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "sift_database"
                 )
+                    .openHelperFactory(RequerySQLiteOpenHelperFactory())
                     .addMigrations(MIGRATION_1_2)
                     .addCallback(object : RoomDatabase.Callback() {
                         override fun onCreate(db: SupportSQLiteDatabase) {

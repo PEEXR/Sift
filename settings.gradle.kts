@@ -16,6 +16,10 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // requery sqlite-android: bundles SQLite with FTS5 (framework SQLite lacks it on some devices)
+        maven("https://jitpack.io") {
+            content { includeGroup("com.github.requery") }
+        }
     }
 }
 

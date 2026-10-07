@@ -89,6 +89,8 @@ dependencies {
     implementation("androidx.room:room-runtime:$roomVersion")
     implementation("androidx.room:room-ktx:$roomVersion")
     ksp("androidx.room:room-compiler:$roomVersion")
+    // Bundled SQLite with FTS5 support (system SQLite may lack the fts5 module)
+    implementation("com.github.requery:sqlite-android:3.49.0")
 
     // Testing
     testImplementation("junit:junit:4.13.2")
