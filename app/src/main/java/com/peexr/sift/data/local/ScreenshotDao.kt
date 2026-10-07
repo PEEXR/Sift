@@ -195,4 +195,10 @@ interface ScreenshotDao {
 
     @Query("SELECT SUM(sizeBytes) FROM screenshots WHERE isJunk = 1")
     fun getRecoverableBytesFlow(): Flow<Long?>
+
+    @Query("SELECT id, uri, displayName, dateAdded, sizeBytes, ocrText, isProcessed, (embedding IS NOT NULL) AS hasEmbedding FROM screenshots WHERE id = :id")
+    fun getScreenshotDetailFlow(id: Long): Flow<ScreenshotDetailRow?>
+
+    @Query("SELECT collectionId, source FROM screenshot_collections WHERE screenshotId = :id")
+    fun getMembershipsForScreenshotFlow(id: Long): Flow<List<MembershipRow>>
 }

@@ -9,14 +9,19 @@ import com.peexr.sift.data.local.AppDatabase
 import com.peexr.sift.data.local.CollectionEntity
 import com.peexr.sift.data.local.CollectionMemberRow
 import com.peexr.sift.data.local.EmbeddingRow
+import com.peexr.sift.data.local.MembershipRow
 import com.peexr.sift.data.local.MembershipSource
 import com.peexr.sift.data.local.ScreenshotCollectionCrossRef
 import com.peexr.sift.data.local.ScreenshotDao
+import com.peexr.sift.data.local.ScreenshotDetailRow
 import com.peexr.sift.data.local.ScreenshotEntity
 import com.peexr.sift.data.perception.PerceptionEngine
 import com.peexr.sift.data.search.toByteArray
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -318,6 +323,99 @@ class ScreenshotRepositoryTest {
             )
         )
     }
+
+    @Test
+    fun setMembership_whenMemberIsTrue_upsertsAsManual() = runBlocking {
+        val repo = createRepository()
+
+        repo.setMembership(screenshotId = 555L, collectionId = "col_test", member = true)
+
+        verify(mockDao).upsertMembership(
+            ScreenshotCollectionCrossRef(
+                screenshotId = 555L,
+                collectionId = "col_test",
+                source = MembershipSource.MANUAL,
+                score = null
+            )
+        )
+    }
+
+    @Test
+    fun setMembership_whenMemberIsFalse_upsertsAsExcluded() = runBlocking {
+        val repo = createRepository()
+
+        repo.setMembership(screenshotId = 555L, collectionId = "col_test", member = false)
+
+        verify(mockDao).upsertMembership(
+            ScreenshotCollectionCrossRef(
+                screenshotId = 555L,
+                collectionId = "col_test",
+                source = MembershipSource.EXCLUDED,
+                score = null
+            )
+        )
+    }
+
+    @Test
+    fun createCollection_returnsGeneratedId() = runBlocking {
+        val repo = createRepository()
+
+        val id = repo.createCollection(name = "Wallpapers", description = "HD backgrounds", colorHex = "#CFE5FF")
+
+        assertTrue("Generated id should start with wallpapers_", id.startsWith("wallpapers_"))
+        verify(mockDao).insertCollection(
+            CollectionEntity(
+                id = id,
+                name = "Wallpapers",
+                description = "HD backgrounds",
+                colorHex = "#CFE5FF"
+            )
+        )
+    }
+
+    @Test
+    fun screenshotDetailFlow_transformsRowIntoDetail() = runBlocking {
+        val repo = createRepository()
+
+        val row = ScreenshotDetailRow(
+            id = 42L,
+            uri = "content://img/42",
+            displayName = "shot42.png",
+            dateAdded = 1000L,
+            sizeBytes = 2048L,
+            ocrText = "Detected text",
+            isProcessed = true,
+            hasEmbedding = true
+        )
+        `when`(mockDao.getScreenshotDetailFlow(42L)).thenReturn(flowOf(row))
+
+        val detail = repo.screenshotDetailFlow(42L).first()
+
+        assertNotNull(detail)
+        assertEquals(42L, detail!!.item.id)
+        assertEquals("content://img/42", detail.item.uri)
+        assertEquals("Detected text", detail.item.ocrText)
+        assertTrue(detail.item.isProcessed)
+        assertTrue(detail.hasEmbedding)
+    }
+
+    @Test
+    fun collectionMembershipFlow_transformsRowsIntoMap() = runBlocking {
+        val repo = createRepository()
+
+        val rows = listOf(
+            MembershipRow(collectionId = "col_1", source = "MANUAL"),
+            MembershipRow(collectionId = "col_2", source = "AUTO")
+        )
+        `when`(mockDao.getMembershipsForScreenshotFlow(42L)).thenReturn(flowOf(rows))
+
+        val map = repo.collectionMembershipFlow(42L).first()
+
+        assertEquals(2, map.size)
+        assertEquals("MANUAL", map["col_1"])
+        assertEquals("AUTO", map["col_2"])
+    }
+
 
     @Test
     fun getReviewQueue_delegatesToDaoQuery(): Unit = runBlocking {

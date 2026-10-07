@@ -183,3 +183,20 @@ data class CollectionMemberItemRow(
     val sizeBytes: Long,
     val source: String
 )
+
+data class ScreenshotDetailRow(
+    val id: Long,
+    val uri: String,
+    val displayName: String,
+    val dateAdded: Long,
+    val sizeBytes: Long,
+    val ocrText: String,
+    val isProcessed: Boolean,
+    val hasEmbedding: Boolean
+)
+
+data class MembershipRow(
+    val collectionId: String,
+    val source: String
+)
+

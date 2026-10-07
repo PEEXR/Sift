@@ -15,3 +15,8 @@ data class CollectionMemberItem(
     val item: ScreenshotItem,
     val kept: Boolean
 )
+
+data class ScreenshotDetail(
+    val item: ScreenshotItem,
+    val hasEmbedding: Boolean
+)

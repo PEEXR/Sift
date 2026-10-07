@@ -1,13 +1,12 @@
 package com.peexr.sift.ui.navigation
 
-import android.content.Intent
-import android.net.Uri
-import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
@@ -26,7 +25,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.peexr.sift.data.local.SettingsManager
 import com.peexr.sift.data.repository.ScreenshotRepository
@@ -39,6 +37,8 @@ import com.peexr.sift.ui.collections.CollectionsViewModel
 import com.peexr.sift.ui.library.LibraryRoute
 import com.peexr.sift.ui.library.LibraryViewModel
 import com.peexr.sift.ui.settings.SettingsDialog
+import com.peexr.sift.ui.viewer.ViewerRoute
+import com.peexr.sift.ui.viewer.ViewerViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,10 +49,10 @@ fun SiftMainApp(
     repository: ScreenshotRepository,
     collectionsViewModel: CollectionsViewModel
 ) {
-    val context = LocalContext.current
     var currentDestination by remember { mutableStateOf<SiftDestination>(SiftDestination.Library) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var openCollectionId by remember { mutableStateOf<String?>(null) }
+    var viewerScreenshotId by remember { mutableStateOf<Long?>(null) }
 
     val destinations = listOf(
         SiftDestination.Library,
@@ -78,7 +78,8 @@ fun SiftMainApp(
                     is SiftDestination.Library -> {
                         LibraryRoute(
                             viewModel = libraryViewModel,
-                            onOpenSettings = { showSettingsDialog = true }
+                            onOpenSettings = { showSettingsDialog = true },
+                            onOpenScreenshot = { item -> viewerScreenshotId = item.id }
                         )
                     }
                     is SiftDestination.Collections -> {
@@ -116,23 +117,37 @@ fun SiftMainApp(
                             currentDestination = SiftDestination.Review
                         },
                         onOpenScreenshot = { item ->
-                            val intent = Intent(Intent.ACTION_VIEW).apply {
-                                setDataAndType(Uri.parse(item.uri), "image/*")
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            }
-                            try {
-                                context.startActivity(intent)
-                            } catch (e: Exception) {
-                                Log.e("SiftMainApp", "Failed to open screenshot ${item.id}", e)
-                            }
+                            viewerScreenshotId = item.id
                         }
                     )
                 }
             }
 
-            // Floating pill nav: hidden while a collection is open
+            // Viewer overlay on top of everything with scale and fade transition
             AnimatedVisibility(
-                visible = openCollectionId == null,
+                visible = viewerScreenshotId != null,
+                enter = fadeIn() + scaleIn(initialScale = 0.92f),
+                exit = fadeOut() + scaleOut(targetScale = 0.92f),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                viewerScreenshotId?.let { id ->
+                    val viewerViewModel: ViewerViewModel = viewModel(
+                        key = "viewer-$id",
+                        factory = ViewerViewModel.Factory(repository, id)
+                    )
+                    BackHandler {
+                        viewerScreenshotId = null
+                    }
+                    ViewerRoute(
+                        viewModel = viewerViewModel,
+                        onClose = { viewerScreenshotId = null }
+                    )
+                }
+            }
+
+            // Floating pill nav: hidden while a collection or viewer is open
+            AnimatedVisibility(
+                visible = openCollectionId == null && viewerScreenshotId == null,
                 enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
                 exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
                 modifier = Modifier.align(Alignment.BottomCenter)
@@ -145,6 +160,7 @@ fun SiftMainApp(
             }
         }
     }
+
 
     if (showSettingsDialog) {
         SettingsDialog(

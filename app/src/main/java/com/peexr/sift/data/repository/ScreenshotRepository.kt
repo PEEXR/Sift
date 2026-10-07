@@ -17,13 +17,16 @@ import com.peexr.sift.data.embedding.ModelStore
 import com.peexr.sift.data.local.AppDatabase
 import com.peexr.sift.data.local.CollectionEntity
 import com.peexr.sift.data.local.CollectionMemberRow
+import com.peexr.sift.data.local.MembershipRow
 import com.peexr.sift.data.local.MembershipSource
 import com.peexr.sift.data.local.ScreenshotCollectionCrossRef
+import com.peexr.sift.data.local.ScreenshotDetailRow
 import com.peexr.sift.data.local.ScreenshotEntity
 import com.peexr.sift.data.model.CollectionMemberItem
 import com.peexr.sift.data.model.CollectionSummary
 import com.peexr.sift.data.model.JevQuestion
 import com.peexr.sift.data.model.JevRequest
+import com.peexr.sift.data.model.ScreenshotDetail
 import com.peexr.sift.data.model.ScreenshotItem
 import com.peexr.sift.data.perception.PerceptionEngine
 import com.peexr.sift.data.search.reciprocalRankFusion
@@ -387,7 +390,7 @@ class ScreenshotRepository(
         }
     }
 
-    suspend fun createCollection(name: String, description: String, colorHex: String) = withContext(Dispatchers.IO) {
+    suspend fun createCollection(name: String, description: String, colorHex: String): String = withContext(Dispatchers.IO) {
         val id = name.lowercase().replace("\\s+".toRegex(), "_") + "_" + System.currentTimeMillis()
         dao.insertCollection(CollectionEntity(id, name, description, colorHex))
         try {
@@ -398,6 +401,15 @@ class ScreenshotRepository(
             try {
                 Log.e("ScreenshotRepository", "Failed to refresh auto collection $id after creation", e)
             } catch (_: Throwable) {}
+        }
+        id
+    }
+
+    suspend fun setMembership(screenshotId: Long, collectionId: String, member: Boolean) = withContext(Dispatchers.IO) {
+        if (member) {
+            keepInCollection(screenshotId, collectionId)
+        } else {
+            removeFromCollection(screenshotId, collectionId)
         }
     }
 
@@ -458,6 +470,31 @@ class ScreenshotRepository(
             }
         }.flowOn(Dispatchers.Default)
 
+    fun screenshotDetailFlow(id: Long): Flow<ScreenshotDetail?> =
+        dao.getScreenshotDetailFlow(id).map { row ->
+            if (row != null) {
+                ScreenshotDetail(
+                    item = ScreenshotItem(
+                        id = row.id,
+                        uri = row.uri,
+                        displayName = row.displayName,
+                        dateAdded = row.dateAdded,
+                        sizeBytes = row.sizeBytes,
+                        ocrText = row.ocrText,
+                        isProcessed = row.isProcessed
+                    ),
+                    hasEmbedding = row.hasEmbedding
+                )
+            } else {
+                null
+            }
+        }.flowOn(Dispatchers.Default)
+
+    fun collectionMembershipFlow(id: Long): Flow<Map<String, String>> =
+        dao.getMembershipsForScreenshotFlow(id).map { rows ->
+            rows.associate { it.collectionId to it.source }
+        }.flowOn(Dispatchers.Default)
+
     fun collectionFlow(collectionId: String): Flow<CollectionSummary?> =
         collectionSummariesFlow.map { summaries ->
             summaries.firstOrNull { it.id == collectionId }
@@ -467,6 +504,7 @@ class ScreenshotRepository(
         dao.updateCollectionDescription(id, description)
         refreshAutoCollections(onlyCollectionId = id)
     }
+
 
     fun createDeletePendingIntent(uris: List<Uri>): PendingIntent? {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

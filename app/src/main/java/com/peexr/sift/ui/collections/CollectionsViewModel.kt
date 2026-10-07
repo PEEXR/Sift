@@ -15,10 +15,20 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+/**
+ * Determines the next round-robin collection palette color hex based on existing collection count.
+ */
+fun nextCollectionColorHex(existingCount: Int): String {
+    val size = CollectionPaletteHex.size
+    val index = ((existingCount % size) + size) % size
+    return CollectionPaletteHex[index]
+}
+
 data class CollectionsUiState(
     val collections: List<CollectionSummary> = emptyList(),
     val statusMessage: String? = null
 )
+
 
 class CollectionsViewModel(
     private val repository: ScreenshotRepository
@@ -46,7 +56,7 @@ class CollectionsViewModel(
 
         val finalDescription = description.trim().ifBlank { trimmedName }
         val currentCount = uiState.value.collections.size
-        val colorHex = CollectionPaletteHex[currentCount % 6]
+        val colorHex = nextCollectionColorHex(currentCount)
 
         viewModelScope.launch {
             try {

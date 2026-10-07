@@ -1,8 +1,5 @@
 package com.peexr.sift.ui.library
 
-import android.content.Intent
-import android.net.Uri
-import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -66,7 +63,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.text.font.FontWeight
@@ -89,6 +85,7 @@ import java.util.Locale
 fun LibraryRoute(
     viewModel: LibraryViewModel,
     onOpenSettings: () -> Unit,
+    onOpenScreenshot: (ScreenshotItem) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -101,6 +98,7 @@ fun LibraryRoute(
         onRefresh = viewModel::refresh,
         onClearStatusMessage = viewModel::clearStatusMessage,
         onOpenSettings = onOpenSettings,
+        onOpenScreenshot = onOpenScreenshot,
         modifier = modifier
     )
 }
@@ -118,23 +116,9 @@ fun LibraryScreen(
     onRefresh: () -> Unit,
     onClearStatusMessage: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenScreenshot: (ScreenshotItem) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    val onOpenScreenshot: (ScreenshotItem) -> Unit = remember(context) {
-        { item ->
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(Uri.parse(item.uri), "image/*")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            try {
-                context.startActivity(intent)
-            } catch (e: Exception) {
-                Log.e("LibraryScreen", "Failed to open screenshot ${item.id}", e)
-            }
-        }
-    }
-
     val snackbarHostState = remember { SnackbarHostState() }
 
     // Indexing only progresses while Sift is on screen (the OEM freezer pauses it in the background),
