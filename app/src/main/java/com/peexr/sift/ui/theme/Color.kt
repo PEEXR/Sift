@@ -1,61 +1,108 @@
 package com.peexr.sift.ui.theme
 
+import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 
-// Expressive Dark Theme Tonal Palette
-val SiftPrimaryDark = Color(0xFFD0BCFF)
-val SiftOnPrimaryDark = Color(0xFF381E72)
-val SiftPrimaryContainerDark = Color(0xFF4F378B)
-val SiftOnPrimaryContainerDark = Color(0xFFEADDFF)
+// Brand / Primary
+val SiftViolet = Color(0xFF6B3FD4)
+val SiftInk = Color(0xFF1E1530)
+val SiftDisplayInk = Color(0xFF2A1450)
 
-val SiftSecondaryDark = Color(0xFFCCC2DC)
-val SiftOnSecondaryDark = Color(0xFF332D41)
-val SiftSecondaryContainerDark = Color(0xFF4A4458)
-val SiftOnSecondaryContainerDark = Color(0xFFE8DEF8)
+// Accents
+val KeepLime = Color(0xFFC6F24E)
+val OnKeepLime = Color(0xFF1E2B00)
+val RemoveCoral = Color(0xFFFF6B57)
+val OnRemoveCoral = Color(0xFF3A0A00)
 
-val SiftTertiaryDark = Color(0xFFEFB8C8)
-val SiftOnTertiaryDark = Color(0xFF492532)
-val SiftTertiaryContainerDark = Color(0xFF633B48)
-val SiftOnTertiaryContainerDark = Color(0xFFFFD8E4)
+// Surfaces & Containers (Light)
+val SiftBackgroundLight = Color(0xFFFBF7FF)
+val SiftSurfaceLight = Color(0xFFFBF7FF)
+val SiftSurfaceContainerLowestLight = Color(0xFFFFFFFF)
+val SiftSurfaceContainerLowLight = Color(0xFFF8F1FF)
+val SiftSurfaceContainerLight = Color(0xFFF3ECFF)
+val SiftSurfaceContainerHighLight = Color(0xFFECE3FA)
+val SiftSurfaceContainerHighestLight = Color(0xFFE9DEF8)
+val SiftSurfaceVariantLight = Color(0xFFE9DEF8)
+val SiftOnSurfaceVariantLight = Color(0xFF5B5470)
+val SiftOutlineLight = Color(0xFF8E86A6)
+val SiftOutlineVariantLight = Color(0xFFCDBDF5)
 
-val SiftBackgroundDark = Color(0xFF141218)
-val SiftOnBackgroundDark = Color(0xFFE6E0E9)
-val SiftSurfaceDark = Color(0xFF1D1B20)
-val SiftOnSurfaceDark = Color(0xFFE6E0E9)
+// Inverse
+val InverseSurface = Color(0xFF2A1450)
+val InverseOnSurface = Color(0xFFFFFFFF)
+
+// Dark Theme Brand & Roles
+val SiftVioletDark = Color(0xFFD0BCFF)
+val SiftInkDark = Color(0xFFEDE0F7)
+val SiftDisplayInkDark = Color(0xFFE5D8FF)
+
+val KeepLimeDark = Color(0xFFC6F24E)
+val OnKeepLimeDark = Color(0xFF1E2B00)
+val RemoveCoralDark = Color(0xFFFF6B57)
+val OnRemoveCoralDark = Color(0xFF3A0A00)
+
+val SiftBackgroundDark = Color(0xFF140B24)
+val SiftSurfaceDark = Color(0xFF140B24)
+val SiftSurfaceContainerLowestDark = Color(0xFF0F071C)
+val SiftSurfaceContainerLowDark = Color(0xFF1A112B)
+val SiftSurfaceContainerDark = Color(0xFF1E1530)
+val SiftSurfaceContainerHighDark = Color(0xFF281D3C)
+val SiftSurfaceContainerHighestDark = Color(0xFF33274A)
 val SiftSurfaceVariantDark = Color(0xFF49454F)
 val SiftOnSurfaceVariantDark = Color(0xFFCAC4D0)
+val SiftOutlineDark = Color(0xFF958E9E)
+val SiftOutlineVariantDark = Color(0xFF4A4453)
 
-val SiftErrorDark = Color(0xFFF2B8B5)
-val SiftOnErrorDark = Color(0xFF601410)
+val InverseSurfaceDark = Color(0xFFEDE0F7)
+val InverseOnSurfaceDark = Color(0xFF140B24)
 
-// Expressive Light Theme Tonal Palette
-val SiftPrimaryLight = Color(0xFF6750A4)
-val SiftOnPrimaryLight = Color(0xFFFFFFFF)
-val SiftPrimaryContainerLight = Color(0xFFEADDFF)
-val SiftOnPrimaryContainerLight = Color(0xFF21005D)
+// Six collection tonal pairs (container, ink) in spec order:
+// pink, lilac, sky, lime, peach, mint
+val CollectionPalette: List<Pair<Color, Color>> = listOf(
+    Pair(Color(0xFFFFD8EC), Color(0xFF3E0A2A)), // pink
+    Pair(Color(0xFFE5D8FF), Color(0xFF23005C)), // lilac
+    Pair(Color(0xFFCFE5FF), Color(0xFF00264D)), // sky
+    Pair(Color(0xFFE4F7B5), Color(0xFF1E2B00)), // lime
+    Pair(Color(0xFFFFDCC8), Color(0xFF3A1500)), // peach
+    Pair(Color(0xFFC9F2DE), Color(0xFF00311F))  // mint
+)
 
-val SiftSecondaryLight = Color(0xFF625B71)
-val SiftOnSecondaryLight = Color(0xFFFFFFFF)
-val SiftSecondaryContainerLight = Color(0xFFE8DEF8)
-val SiftOnSecondaryContainerLight = Color(0xFF1D192B)
+@Immutable
+data class SiftExtendedColors(
+    val displayInk: Color,
+    val keepAccent: Color,
+    val onKeepAccent: Color,
+    val removeAccent: Color,
+    val onRemoveAccent: Color,
+    val inverseSurface: Color = InverseSurface,
+    val onInverseSurface: Color = InverseOnSurface,
+    val collectionPalette: List<Pair<Color, Color>> = CollectionPalette
+)
 
-val SiftTertiaryLight = Color(0xFF7D5260)
-val SiftOnTertiaryLight = Color(0xFFFFFFFF)
-val SiftTertiaryContainerLight = Color(0xFFFFD8E4)
-val SiftOnTertiaryContainerLight = Color(0xFF31111D)
+val LightExtendedColors = SiftExtendedColors(
+    displayInk = SiftDisplayInk,
+    keepAccent = KeepLime,
+    onKeepAccent = OnKeepLime,
+    removeAccent = RemoveCoral,
+    onRemoveAccent = OnRemoveCoral,
+    inverseSurface = InverseSurface,
+    onInverseSurface = InverseOnSurface,
+    collectionPalette = CollectionPalette
+)
 
-val SiftBackgroundLight = Color(0xFFFEF7FF)
-val SiftOnBackgroundLight = Color(0xFF1D1B20)
-val SiftSurfaceLight = Color(0xFFFEF7FF)
-val SiftOnSurfaceLight = Color(0xFF1D1B20)
-val SiftSurfaceVariantLight = Color(0xFFE7E0EC)
-val SiftOnSurfaceVariantLight = Color(0xFF49454F)
+val DarkExtendedColors = SiftExtendedColors(
+    displayInk = SiftDisplayInkDark,
+    keepAccent = KeepLimeDark,
+    onKeepAccent = OnKeepLimeDark,
+    removeAccent = RemoveCoralDark,
+    onRemoveAccent = OnRemoveCoralDark,
+    inverseSurface = InverseSurfaceDark,
+    onInverseSurface = InverseOnSurfaceDark,
+    collectionPalette = CollectionPalette
+)
 
-val SiftErrorLight = Color(0xFFB3261E)
-val SiftOnErrorLight = Color(0xFFFFFFFF)
-
-// Accent badges
-val MemeAccent = Color(0xFF00C853)
+// Legacy accent aliases for compatibility
+val MemeAccent = KeepLime
 val QuoteAccent = Color(0xFFFF9100)
 val ReceiptAccent = Color(0xFF2979FF)
-val JunkAccent = Color(0xFFFF1744)
+val JunkAccent = RemoveCoral

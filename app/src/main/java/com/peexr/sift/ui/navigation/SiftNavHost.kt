@@ -10,9 +10,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -22,15 +19,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
 import com.peexr.sift.data.local.SettingsManager
 import com.peexr.sift.ui.cleanup.CleanupScreen
 import com.peexr.sift.ui.cleanup.CleanupViewModel
+import com.peexr.sift.ui.collections.CollectionsListScreen
 import com.peexr.sift.ui.collections.CollectionsScreen
 import com.peexr.sift.ui.collections.CollectionsViewModel
 import com.peexr.sift.ui.settings.SettingsDialog
+import com.peexr.sift.ui.theme.SiftTheme
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,12 +37,13 @@ fun SiftMainApp(
     cleanupViewModel: CleanupViewModel,
     settingsManager: SettingsManager
 ) {
-    var currentDestination by remember { mutableStateOf<SiftDestination>(SiftDestination.Collections) }
+    var currentDestination by remember { mutableStateOf<SiftDestination>(SiftDestination.Library) }
     var showSettingsDialog by remember { mutableStateOf(false) }
 
     val destinations = listOf(
+        SiftDestination.Library,
         SiftDestination.Collections,
-        SiftDestination.Cleanup
+        SiftDestination.Review
     )
 
     Scaffold(
@@ -53,8 +52,7 @@ fun SiftMainApp(
                 title = {
                     Text(
                         text = "Sift",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
+                        style = MaterialTheme.typography.titleLarge
                     )
                 },
                 actions = {
@@ -64,32 +62,9 @@ fun SiftMainApp(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
-                    titleContentColor = MaterialTheme.colorScheme.onBackground
+                    titleContentColor = SiftTheme.extended.displayInk
                 )
             )
-        },
-        bottomBar = {
-            NavigationBar(
-                containerColor = MaterialTheme.colorScheme.surface,
-                tonalElevation = 4.dp
-            ) {
-                destinations.forEach { dest ->
-                    val selected = currentDestination == dest
-                    NavigationBarItem(
-                        selected = selected,
-                        onClick = { currentDestination = dest },
-                        icon = { Icon(dest.icon, contentDescription = dest.title) },
-                        label = { Text(dest.title) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            selectedTextColor = MaterialTheme.colorScheme.onSurface,
-                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    )
-                }
-            }
         }
     ) { padding ->
         Box(
@@ -99,17 +74,28 @@ fun SiftMainApp(
         ) {
             Crossfade(
                 targetState = currentDestination,
-                label = "NavigationCrossfade"
+                label = "NavigationCrossfade",
+                modifier = Modifier.fillMaxSize()
             ) { destination ->
                 when (destination) {
-                    is SiftDestination.Collections -> {
+                    is SiftDestination.Library -> {
                         CollectionsScreen(viewModel = collectionsViewModel)
                     }
-                    is SiftDestination.Cleanup -> {
+                    is SiftDestination.Collections -> {
+                        CollectionsListScreen()
+                    }
+                    is SiftDestination.Review -> {
                         CleanupScreen(viewModel = cleanupViewModel)
                     }
                 }
             }
+
+            FloatingPillNav(
+                destinations = destinations,
+                currentDestination = currentDestination,
+                onDestinationSelected = { currentDestination = it },
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
         }
     }
 

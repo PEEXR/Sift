@@ -67,7 +67,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.peexr.sift.data.model.ScreenshotItem
-import com.peexr.sift.ui.theme.JunkAccent
+import com.peexr.sift.ui.navigation.FloatingNavClearance
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -120,7 +120,9 @@ fun CleanupScreen(
                 Surface(
                     color = MaterialTheme.colorScheme.surface,
                     tonalElevation = 8.dp,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = FloatingNavClearance)
                 ) {
                     Row(
                         modifier = Modifier
@@ -165,7 +167,12 @@ fun CleanupScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
-            contentPadding = PaddingValues(16.dp),
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                top = 16.dp,
+                end = 16.dp,
+                bottom = 16.dp + FloatingNavClearance
+            ),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // Storage Hero Card

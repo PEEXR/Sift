@@ -6,61 +6,35 @@ Source RFC: `docs/RFC_LOCAL_AI_STACK.md` (Phase 2, adapted: **ONNX Runtime inste
 
 **EXECUTION RULE (hard): Do NOT run Gradle, adb, tests, or ANY long-running/background command. Only read files and edit/create files. The orchestrator builds and tests. Finish your turn promptly with a summary.**
 
-## THIS DISPATCH = Phase 3 / Stage 3b: auto-filling collections (collections ARE the categories)
+## THIS DISPATCH = UI Stage 1: Expressive theme foundation + floating pill navigation
 
-Product rules (decided by the user):
-- There is ONE concept: **collection**. Never introduce a "category"/"group" type, table, or the word category in code or docs. No default collections: the user creates every collection (name + description).
-- A collection auto-fills from its description using EmbeddingGemma 2 embeddings. A screenshot may belong to MANY collections.
-- The user reviews a collection by swiping keep/remove. "Remove from collection" must be REMEMBERED so auto-fill never re-adds it. Users can also add screenshots manually. Deleting the file from storage is a separate existing flow (`createDeletePendingIntent` / `removeDeletedScreenshots`): do not change it.
-- Stack: ML Kit OCR + EmbeddingGemma 2 only. No Laya, no trained models. No UI work in this stage (keep existing UI compiling).
+Read FIRST: `docs/design/SIFT_UI_SPEC.md` (source of truth) and the mock markup in `docs/design/mock/` (`Main.dc.html` shows the nav pill, header, search pill and colors). Library versions are already upgraded (material3 1.5.0-alpha18, Compose BOM 2026.06.01): do NOT change any dependency or build file.
 
-### 1. Schema (Room v2 -> v3): `data/local/Entities.kt`, `AppDatabase.kt`, `Migrations.kt`
-- `CollectionEntity`: add `@ColumnInfo(defaultValue = "1") val autoFill: Boolean = true`.
-- `ScreenshotCollectionCrossRef`: add `@ColumnInfo(defaultValue = "MANUAL") val source: String = MembershipSource.MANUAL` and `val score: Float? = null` (z-score for AUTO rows). Add `object MembershipSource { const val AUTO = "AUTO"; const val MANUAL = "MANUAL"; const val EXCLUDED = "EXCLUDED" }`.
-- `AppDatabase` version = 3; add `MIGRATION_2_3` in `Migrations.kt` following that file's style (SQL constants + Migration object):
-  - `ALTER TABLE collections ADD COLUMN autoFill INTEGER NOT NULL DEFAULT 1`
-  - `ALTER TABLE screenshot_collections ADD COLUMN source TEXT NOT NULL DEFAULT 'MANUAL'`
-  - `ALTER TABLE screenshot_collections ADD COLUMN score REAL`
-  Existing membership rows become MANUAL. The `@ColumnInfo(defaultValue=...)` values MUST match the SQL defaults or Room's schema validation fails when the database opens. Register with `.addMigrations(MIGRATION_1_2, MIGRATION_2_3)`. Do not touch MIGRATION_1_2.
+Scope of THIS stage: theme + navigation shell only. Screens get rebuilt in later stages; here they must just compile, use the new theme, and lose obsolete bits.
 
-### 2. DAO: `data/local/ScreenshotDao.kt`
-- Queries that list members of a collection, or collections of a screenshot, must ignore EXCLUDED rows: add `AND sc.source != 'EXCLUDED'` to `getCollectionsForScreenshot` and `getScreenshotsForCollectionFlow`.
-- Add:
-  - `@Query("DELETE FROM screenshot_collections WHERE collectionId = :collectionId AND source = 'AUTO'") suspend fun clearAutoMembers(collectionId: String)`
-  - `@Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertMemberships(rows: List<ScreenshotCollectionCrossRef>)` (IGNORE so MANUAL/EXCLUDED rows are never overwritten by AUTO)
-  - `@Transaction suspend fun replaceAutoMembers(collectionId: String, rows: List<ScreenshotCollectionCrossRef>)` = clearAutoMembers + insertMemberships
-  - `@Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertMembership(row: ScreenshotCollectionCrossRef)`
-  - `@Query("SELECT * FROM collections WHERE autoFill = 1") suspend fun getAutoFillCollections(): List<CollectionEntity>`
-  - `@Query("SELECT * FROM collections WHERE id = :id") suspend fun getCollectionById(id: String): CollectionEntity?`
-  - `getReviewQueue(collectionId: String): List<CollectionMemberRow>`: members of one collection (not EXCLUDED), least-confident first:
-    `SELECT s.*, sc.source AS membershipSource, sc.score AS membershipScore FROM screenshots s INNER JOIN screenshot_collections sc ON s.id = sc.screenshotId WHERE sc.collectionId = :collectionId AND sc.source != 'EXCLUDED' ORDER BY (sc.score IS NULL), sc.score ASC, s.dateAdded DESC`
-    with `data class CollectionMemberRow(@Embedded val screenshot: ScreenshotEntity, val membershipSource: String, val membershipScore: Float?)` in Entities.kt.
+### 1. Theme — `app/src/main/java/com/peexr/sift/ui/theme/`
+- `Color.kt`: replace the palette with the spec's tokens (light + a matching dark scheme as described in the spec). Name them by role (e.g. `SiftViolet`, `SiftInk`, `SiftDisplayInk`, `KeepLime`, `OnKeepLime`, `RemoveCoral`, `OnRemoveCoral`, `InverseSurface`...). Also add the six collection tonal pairs as a `val CollectionPalette: List<Pair<Color, Color>>` (container, ink) in the spec's order.
+- Extra tokens the M3 scheme has no slot for (display ink, keep/remove accents, collection palette) go in an `@Immutable data class SiftExtendedColors` provided via `staticCompositionLocalOf` + accessor `SiftTheme.extended` (an `object SiftTheme { val extended: SiftExtendedColors @Composable get() = ... }`).
+- `Type.kt`: `val BricolageGrotesque = FontFamily(Font(R.font.bricolage_grotesque, FontWeight.ExtraBold, variationSettings = FontVariation.Settings(FontVariation.weight(800))), Font(R.font.bricolage_grotesque, FontWeight.SemiBold, variationSettings = FontVariation.Settings(FontVariation.weight(600))))` and `val DmSans = FontFamily(` 400/500/700 the same way `)` (use `@OptIn(ExperimentalTextApi::class)` if the compiler requires it). Typography: display*/headline* = BricolageGrotesque ExtraBold with negative letterSpacing (displayLarge 64.sp/line 61.sp/−2.5.sp, displayMedium 56.sp, displaySmall 44.sp, headlineLarge 34.sp/−1.sp, headlineMedium 28.sp/−0.8.sp, headlineSmall 22.sp); title*/body*/label* = DmSans (titleLarge 20.sp Bold, titleMedium 16.sp Bold, bodyLarge 16.sp, bodyMedium 15.sp, bodySmall 13.sp, labelLarge 15.sp Bold, labelMedium 14.sp Bold, labelSmall 12.sp Medium). No `FontFamily.Default` anywhere.
+- `Shape.kt`: extraSmall 8.dp, small 14.dp, medium 18.dp, large 28.dp, extraLarge 36.dp (RoundedCornerShape).
+- `Theme.kt`: `SiftTheme(darkTheme, content)` uses `MaterialExpressiveTheme(colorScheme, motionScheme = MotionScheme.expressive(), shapes, typography)`. Dynamic color OFF (remove the dynamicColor path). Edge-to-edge friendly (no hard-coded status bar color writes; keep what MainActivity needs to compile).
 
-### 3. Pure matching logic: NEW `app/src/main/java/com/peexr/sift/data/collections/CollectionMatcher.kt`
-- `object CollectionMatcher` with `const val DEFAULT_Z_THRESHOLD = 1.5f` and an internal (never user-visible) list `BACKGROUND_DESCRIPTIONS` with exactly these 20 strings:
-  "meme or joke image", "chat or messaging conversation", "social media post", "study notes or textbook page", "exam question paper", "document or form", "receipt or payment", "ticket or booking", "source code", "video game screen", "map", "shopping product page", "phone settings screen", "news article", "video app screen", "photo of a person", "music player", "calendar or schedule", "email inbox", "home screen with app icons".
-  KDoc must say: these only normalise each image's similarity scale; they are NOT collections and are never shown to the user.
-- `fun zScore(image: FloatArray, collection: FloatArray, background: List<FloatArray>): Float` = (dot(image, collection) − mean over b of dot(image, b)) / (population std over b of dot(image, b)); return 0f if std < 1e-6. Use `dot` from `data/search/VectorMath.kt`.
-- `fun match(collection: FloatArray, screenshots: List<Pair<Long, FloatArray>>, background: List<FloatArray>, threshold: Float = DEFAULT_Z_THRESHOLD): List<Pair<Long, Float>>` returning (screenshotId, z) for every screenshot with z >= threshold, sorted by z descending. Precompute each image's background mean/std once per call. Pure Kotlin, no Android types.
-- KDoc calibration note: measured on the user's real screenshots, z >= 1.5 includes true matches plus a few near misses (the swipe review handles those); z >= 2.0 is high precision.
+### 2. Navigation — `ui/navigation/SiftDestination.kt`, `SiftNavHost.kt`
+- Destinations: `Library` (route "library", existing `CollectionsScreen` content for now), `Collections` (route "collections", NEW placeholder screen `ui/collections/CollectionsListScreen.kt` showing the 58sp "Collections" title + "Coming next" body text, themed), `Review` (route "review", existing `CleanupScreen` for now). Start destination = Library. Icons: rounded Material icons (GridView / CollectionsBookmark or FolderSpecial / Style or SwipeLeft — pick close equivalents from material-icons-extended).
+- Replace the full-width `NavigationBar` with a custom **floating pill nav** composable `ui/navigation/FloatingPillNav.kt`: Row in a `Surface(shape = CircleShape, color = surfaceContainerHighest, shadowElevation = 6.dp)`, 6.dp padding, 4.dp spacing, centered, 22.dp above the bottom + navigation bar insets (`WindowInsets.navigationBars`). Selected item: primary pill (52.dp tall, 20.dp horizontal padding) with icon + label (labelLarge, onPrimary); unselected: 52.dp circle icon button (onSurfaceVariant) with contentDescription. Animate width/colors with `animateContentSize()` + `animateColorAsState` using `MaterialTheme.motionScheme` specs where available. The pill overlays content (screens must add bottom padding ≈ 100.dp so content isn't hidden — expose `val FloatingNavClearance = 100.dp`).
+- Remove the old `Scaffold` bottomBar usage accordingly (keep a Scaffold if useful for snackbars).
 
-### 4. Repository: `data/repository/ScreenshotRepository.kt`
-- `suspend fun refreshAutoCollections(onlyCollectionId: String? = null)`: no-op if the model is not Ready/installed. Embed the background descriptions and each auto-fill collection's `description` (fall back to `name` if blank) with `embeddingEngine.embedText(...)`, caching vectors in an in-memory map keyed by the text and guarded by a `Mutex`. Load `dao.getAllEmbeddings()` once; skip vectors that are not 128 floats. For each collection (or only `onlyCollectionId`): `CollectionMatcher.match(...)`, then `dao.replaceAutoMembers(id, rows with source = AUTO and score = z)`. Math on `Dispatchers.Default`, DB on `Dispatchers.IO`. Rethrow `CancellationException`.
-- `createCollection(...)`: keep the signature; after inserting, call `refreshAutoCollections(onlyCollectionId = id)` but never fail creation if that throws (log it; rethrow CancellationException).
-- `suspend fun removeFromCollection(screenshotId: Long, collectionId: String)` → `upsertMembership(source = EXCLUDED, score = null)` (remembered). Update existing callers of the DAO's old `removeFromCollection` (grep) so the UI keeps compiling.
-- `suspend fun keepInCollection(screenshotId: Long, collectionId: String)` → upsert MANUAL, score null (a confirmed keep is no longer auto).
-- `suspend fun addToCollection(screenshotId: Long, collectionId: String)` → upsert MANUAL (also un-excludes).
-- `suspend fun getReviewQueue(collectionId: String): List<CollectionMemberRow>` exposing the DAO query.
-- Existing `classifyScreenshotWithJev` uses `assignToCollection`; leave it working (it inserts MANUAL by default).
+### 3. Remove obsolete UI (the user dropped Jev/Laya)
+- In `CollectionsScreen.kt`: delete the "Jev Auto-Tag" extended FAB and any UI text mentioning Jev; the create-collection dialog text becomes: title "New collection", fields "Name" and "Description" with supporting text "Screenshots matching this description are added automatically." Keep the sync FAB for now.
+- Do NOT delete Jev data/API classes or ViewModel methods in this stage (only the UI entry points). If a ViewModel method becomes unused, leave it.
 
-### 5. Indexing worker
-- At the end of `EmbeddingWorker.doWork()`, only if it embedded at least one screenshot, call `app.repository.refreshAutoCollections()` inside try/catch (rethrow CancellationException, log others).
+### Constraints
+- Use `MaterialTheme.colorScheme/typography/shapes` and `SiftTheme.extended` — no raw `Color(0x...)` in screen files (only in Color.kt). No hard-coded font families outside Type.kt.
+- Keep all existing features compiling and working (search, sync, collections dialog, cleanup).
+- Do NOT run Gradle or any command (orchestrator builds). Do not touch data/, build files, docs/, or tests unless a test breaks from a rename.
 
-### 6. Tests (JVM unit tests)
-- NEW `app/src/test/java/com/peexr/sift/data/collections/CollectionMatcherTest.kt`: zScore math with hand-made normalized vectors; threshold filtering; sort order; std≈0 returns 0; empty inputs; the same screenshot matching two different collections (call match twice).
-- Update `ScreenshotRepositoryTest` mocks if constructor/DAO signatures changed; keep all existing tests passing.
-
-Do not touch the embedding engine, tokenizer, patchifier, docs, or add dependencies.
+### Acceptance
+- App compiles; launches on Library with the floating pill nav; switching tabs works; fonts are Bricolage Grotesque/DM Sans; palette is violet/lilac per spec; no Jev button.
 
 ---
 BACKGROUND REFERENCE (previous stages, do not act on it):
