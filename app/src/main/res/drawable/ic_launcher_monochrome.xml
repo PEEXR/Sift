@@ -4,12 +4,28 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Back Rectangle -->
+    <group android:rotation="-17" android:pivotX="54" android:pivotY="56" android:translateX="-2" android:translateY="1">
+        <path
+            android:pathData="M43.5,36 H64.5 a4.5,4.5 0 0 1 4.5,4.5 V71.5 a4.5,4.5 0 0 1 -4.5,4.5 H43.5 a4.5,4.5 0 0 1 -4.5,-4.5 V40.5 a4.5,4.5 0 0 1 4.5,-4.5 Z"
+            android:fillColor="#FF000000"
+            android:fillAlpha="0.5" />
+    </group>
+    <group android:rotation="-2" android:pivotX="54" android:pivotY="56" android:translateX="0" android:translateY="0">
+        <path
+            android:pathData="M43.5,36 H64.5 a4.5,4.5 0 0 1 4.5,4.5 V71.5 a4.5,4.5 0 0 1 -4.5,4.5 H43.5 a4.5,4.5 0 0 1 -4.5,-4.5 V40.5 a4.5,4.5 0 0 1 4.5,-4.5 Z M44.5,39 H63.5 a2.5,2.5 0 0 1 2.5,2.5 V60.5 a2.5,2.5 0 0 1 -2.5,2.5 H44.5 a2.5,2.5 0 0 1 -2.5,-2.5 V41.5 a2.5,2.5 0 0 1 2.5,-2.5 Z"
+            android:fillColor="#FF000000"
+            android:fillType="evenOdd" />
+        <path
+            android:pathData="M42,57 C47,51 52,55 56,56 C60,57 63,53 66,52 V63 H42 Z"
+            android:fillColor="#FF000000" />
+        <path
+            android:pathData="M56,43.5 m-4.3,0 a4.3,4.3 0 1 0 8.6,0 a4.3,4.3 0 1 0 -8.6,0"
+            android:fillColor="#FF000000" />
+    </group>
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M33,19 h34 a8,8 0 0 1 8,8 v44 a8,8 0 0 1 -8,8 h-34 a8,8 0 0 1 -8,-8 v-44 a8,8 0 0 1 8,-8 Z"/>
-    <!-- Front Rectangle -->
+        android:pathData="M71,26.5 Q71,35 79.5,35 Q71,35 71,43.5 Q71,35 62.5,35 Q71,35 71,26.5 Z"
+        android:fillColor="#FF000000" />
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M43,29 h34 a8,8 0 0 1 8,8 v44 a8,8 0 0 1 -8,8 h-34 a8,8 0 0 1 -8,-8 v-44 a8,8 0 0 1 8,-8 Z"/>
+        android:pathData="M58,26.4 Q58,30 61.6,30 Q58,30 58,33.6 Q58,30 54.4,30 Q58,30 58,26.4 Z"
+        android:fillColor="#FF000000" />
 </vector>
