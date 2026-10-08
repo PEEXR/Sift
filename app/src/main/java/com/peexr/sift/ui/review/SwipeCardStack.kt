@@ -47,6 +47,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -217,6 +218,7 @@ private fun InteractiveTopCard(
         color = MaterialTheme.colorScheme.surfaceContainerHighest,
         shadowElevation = 14.dp,
         modifier = modifier
+            .testTag("swipe_top_card")
             .fillMaxSize()
             .offset { IntOffset(dragDx.roundToInt(), offsetY.value.roundToInt()) }
             .rotate(rotation)

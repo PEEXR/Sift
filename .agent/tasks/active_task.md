@@ -6,38 +6,31 @@ Source RFC: `docs/RFC_LOCAL_AI_STACK.md` (Phase 2, adapted: **ONNX Runtime inste
 
 **EXECUTION RULE (hard): Do NOT run Gradle, adb, tests, or ANY long-running/background command. Only read files and edit/create files. The orchestrator builds and tests. Finish your turn promptly with a summary.**
 
-## THIS DISPATCH = Stage 10: release build configuration (signing, R8 shrinking, manifest hardening)
+## THIS DISPATCH = Stage 11: instrumented Compose UI tests for the new screens
 
-Goal: `./gradlew assembleRelease` produces a signed, shrunk, optimised APK (and `bundleRelease` an AAB). The orchestrator has ALREADY created the signing key OUTSIDE the repo: `C:/Users/systems/.sift-signing/sift-release.jks` with `C:/Users/systems/.sift-signing/keystore.properties` (keys: `storeFile`, `storePassword`, `keyAlias`, `keyPassword`). NEVER copy secrets into the repo; never print passwords.
+Goal: automated device/emulator tests that exercise the NEW stateless screens with fake in-memory state — no database, no model, no real screenshots, no network — so they are deterministic and run on any Android 8+ device. They are compiled by `assembleDebugAndroidTest` and run later with `connectedDebugAndroidTest` (the orchestrator runs them; you must NOT run Gradle or any command).
 
-Read FIRST: `app/build.gradle.kts` (existing `release` and `benchmark` build types, dependencies list), `app/proguard-rules.pro`, `app/src/main/AndroidManifest.xml`, `app/src/main/res/xml/*` if present. Do NOT change dependency versions, compileSdk/targetSdk, or any Kotlin source.
+Read FIRST: the stateless composables and their state classes: `ui/collections/CollectionsListScreen.kt` (`CollectionsListScreen`), `ui/collections/CollectionDetailScreen.kt` (`CollectionDetailScreen`), `ui/review/ReviewPicker.kt` (`ReviewPicker`, `AgeFilterRow`), `ui/review/ReviewScreen.kt` (`ReviewScreen`), `ui/review/SwipeCardStack.kt`, `ui/onboarding/OnboardingScreen.kt` (step composables), `ui/settings/SettingsScreen.kt` (`SettingsScreen`), `ui/viewer/ViewerScreen.kt` (`ViewerScreen`), `ui/navigation/FloatingPillNav.kt`, `ui/theme/Theme.kt` (`SiftTheme`), their UI-state data classes (`CollectionSummary`, `CollectionDetailUiState`, `ReviewUiState`/`ReviewSession`, `ViewerUiState`, `SettingsUiState` etc.) and the existing androidTest folder `app/src/androidTest/java/com/peexr/sift/`. Dependencies `androidx.compose.ui:ui-test-junit4` and `ui-test-manifest` are already declared; do NOT change build files.
 
-### 1. Signing
-In `app/build.gradle.kts` add a `signingConfigs { create("release") { ... } }` that loads the properties file from, in order: env var `SIFT_KEYSTORE_PROPERTIES` (a path), else `${System.getProperty("user.home")}/.sift-signing/keystore.properties`. Use `java.util.Properties` + `FileInputStream`; resolve `storeFile` with `file(...)`. If the properties file does not exist, DO NOT fail the build: leave the release build type unsigned (print a Gradle `logger.warn` once) so other contributors and CI without the key can still configure the project. The `release` build type uses this signing config when it is available. Keep `benchmark` (debug-signed, `initWith(release)`) working: it must NOT inherit the release signing config (re-set its `signingConfig` to debug as it does today) and, since it inherits minify from release, set `isMinifyEnabled = false` and `isShrinkResources = false` explicitly for `benchmark` so profiling builds stay fast to build and readable.
+### What to write (new files under `app/src/androidTest/java/com/peexr/sift/ui/...`)
+Use `createComposeRule()`; wrap every screen in `SiftTheme`; use `ScreenshotItem`s with a bogus uri (`"content://invalid/1"`) — Coil will fail to load and show the placeholder, which is fine. Prefer semantics (`onNodeWithText`, `onNodeWithContentDescription`, roles) over tags; where a node cannot be targeted reliably, add a minimal `Modifier.testTag("...")` in the production composable (allowed, keep tags few and stable, e.g. `"swipe_top_card"`, `"keep_button"`, `"remove_button"` ONLY if the content descriptions are not sufficient).
 
-### 2. Shrinking
-`release`: `isMinifyEnabled = true`, `isShrinkResources = true`, `proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")`, `isDebuggable = false`. Also `ndk { debugSymbolLevel = "SYMBOL_TABLE" }` is NOT needed; skip. Keep `packaging` as is.
+1. `CollectionsListScreenTest`: empty state shows "No collections yet" + create button; with 2 `CollectionSummary` items both names, descriptions in quotes and "N to review" badges render; tapping a card invokes `onOpenCollection(id)`; opening the create sheet via the FAB, "Create" is disabled while the name is blank and enabled after typing; tapping it invokes `onCreate(name, description)` with the typed values.
+2. `CollectionDetailScreenTest`: title and "Fills with …" chip render; All/Auto/Kept filter buttons show counts and tapping one calls the filter callback; "Review N unsure" button visible only when `reviewCount > 0` and invokes the callback; the overflow menu shows "Edit description" and "Delete collection"; delete shows the confirmation dialog.
+3. `ReviewPickerTest`: collections list with "N to review"; age filter chips selectable and invoke the callback; quick-cleanup cards ("Codes & expiring", "Near-duplicates") invoke their callbacks; empty-collections state shows the call to action.
+4. `ReviewScreenTest`: with a 3-card collection-mode session, the keep and remove buttons (content descriptions) invoke their callbacks; the progress label "1 of 3" shows; the "Delete file" button is present in collection mode and absent in search mode; in search mode the trash/keep buttons exist and "Mark remaining N strong match(es)" appears only when only strong cards remain; the summary phase shows "Delete N files · X MB" and its button invokes the delete callback; a swipe gesture (`performTouchInput { swipeLeft() }` on the top card) results in the remove/mark callback being invoked.
+5. `OnboardingStepsTest`: each step composable renders its headline; the Permissions step's "Continue" is disabled until `hasMediaPermission` is true (use whatever parameter the composable exposes); the Model step shows download / progress / ready states.
+6. `SettingsScreenTest`: sections render; toggling the auto-index switch invokes its callback; the sensitivity Strict/Balanced/Loose options invoke the callback with the right value; "Re-index everything" shows a confirmation dialog before invoking; the licenses dialog lists "ONNX Runtime" and "Bricolage Grotesque".
+7. `ViewerScreenTest`: tapping "Collections" opens the sheet listing collection names with checkboxes that invoke the toggle callback; tapping "Text" opens the OCR sheet showing the text, the "Not indexed yet" message when not processed, and "Copy all" when text exists; Delete shows the confirmation dialog.
+8. `FloatingPillNavTest`: three destinations render; the selected one shows its label; tapping another invokes the callback with that destination.
+9. Add a tiny shared helper file `ui/TestFixtures.kt` for fake data builders (`fakeScreenshot(id)`, `fakeCollectionSummary(...)` etc.) so tests stay short.
 
-### 3. `app/proguard-rules.pro` (replace the current minimal content; comment each block with why)
-Write keep rules for everything that is accessed reflectively/JNI so R8 cannot break the app, based on the actual dependencies in `build.gradle.kts`:
-- ONNX Runtime (`ai.onnxruntime.**` — JNI looks up Java classes/fields/methods by name): `-keep class ai.onnxruntime.** { *; }` and `-dontwarn ai.onnxruntime.**` (check if the AAR ships consumer rules; keeping is still safest).
-- requery sqlite-android (JNI): `-keep class io.requery.android.database.** { *; }`, `-keep class io.requery.android.sqlite.** { *; }`, `-dontwarn io.requery.**`.
-- Room: entities/DAOs/`@Database` classes and generated `_Impl` classes (Room ships consumer rules; add belt-and-braces `-keep class * extends androidx.room.RoomDatabase`, `-keep @androidx.room.Entity class *`, `-keepclassmembers` for `@androidx.room.*`), plus all Room query-result holder data classes in `com.peexr.sift.data.local` (they are populated by generated code by name/constructor): `-keep class com.peexr.sift.data.local.** { *; }`.
-- kotlinx.serialization: `-keepattributes *Annotation*, InnerClasses`, `-keep,includedescriptorclasses class com.peexr.sift.**$$serializer { *; }`, `-keepclassmembers class com.peexr.sift.** { *** Companion; }`, `-keepclasseswithmembers class com.peexr.sift.** { kotlinx.serialization.KSerializer serializer(...); }`, and keep `@kotlinx.serialization.Serializable` classes in `com.peexr.sift.data.**` (embedding tokenizer/manifest models, backup file models, Jev models).
-- WorkManager workers instantiated by class name: `-keep class * extends androidx.work.ListenableWorker { public <init>(android.content.Context, androidx.work.WorkerParameters); }`.
-- ML Kit / Play services text recognition and image labeling: `-dontwarn com.google.mlkit.**`, `-keep class com.google.mlkit.** { *; }` only if the libs lack consumer rules (do not over-keep Play services; keep it narrow, `-dontwarn` others).
-- Coil 2.x, OkHttp 4.x, Okio, Compose, coroutines: rely on their consumer rules; add only `-dontwarn okhttp3.**`, `-dontwarn okio.**`, `-dontwarn org.conscrypt.**`, `-dontwarn org.bouncycastle.**`, `-dontwarn org.openjsse.**`.
-- Keep line numbers for crash reports: `-keepattributes SourceFile,LineNumberTable` and `-renamesourcefileattribute SourceFile`.
-- The app's own code that is called only from JNI or reflection (look at `data/embedding/*` for anything touching ONNX tensors by reflection — probably nothing): keep if found.
-
-### 4. Manifest hardening (`AndroidManifest.xml`)
-- `android:allowBackup="false"` (screenshot text/embeddings are private and the DB is not meant to be auto-restored to a new device; collections can be exported from Settings). If a `dataExtractionRules`/`fullBackupContent` attribute exists, keep it consistent (exclude everything).
-- Ensure `android:usesCleartextTraffic="false"` (the model download is HTTPS) — check the model manifest URLs in `data/embedding/ModelStore.kt` use https; report if any is http.
-- Do not add or remove permissions; do not touch exported flags unless something is exported without need — report, don't change, anything suspicious.
-
-### 5. Constraints
-- Keep `testDebugUnitTest` / existing tests unaffected (rules apply to release only).
-- Do NOT run Gradle or any command; the orchestrator builds, inspects R8's `missing_rules.txt`/`usage.txt` and tests. Do not commit. Finish promptly with a summary listing every file touched and any deviation or anything you could not decide.
+### Rules
+- Tests must not depend on animations timing: use `composeTestRule.waitForIdle()`; set `mainClock.autoAdvance` defaults; avoid `Thread.sleep`.
+- Do not use the real `MainActivity`; use `createComposeRule()` (the `ui-test-manifest` supplies the host activity).
+- If a screen's current signature makes a case impossible (e.g. state is created inside the composable), prefer a SMALL production refactor (hoist state into a parameter with a default) over skipping the test; list every production file you touched in your summary. Do not change behaviour.
+- No new dependencies; no network; no reading from the device's real gallery.
+- Do NOT run Gradle or any command. Do not commit. Finish promptly with a summary listing every file touched and any test you had to skip with the reason.
 
 ---
 

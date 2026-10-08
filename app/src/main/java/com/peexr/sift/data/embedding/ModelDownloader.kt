@@ -2,11 +2,13 @@ package com.peexr.sift.data.embedding
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.isActive
 
@@ -65,31 +67,55 @@ class ModelDownloader(
 
                     val startByte = if (partFile.exists()) partFile.length() else 0L
 
-                    if (startByte < fileInfo.sizeBytes) {
-                        val requestBuilder = Request.Builder().url(fileInfo.url)
-                        if (startByte > 0) {
-                            requestBuilder.addHeader("Range", "bytes=$startByte-")
-                        }
-                        val request = requestBuilder.build()
-
-                        client.newCall(request).execute().use { response ->
-                            if (!response.isSuccessful) {
-                                throw Exception("Failed to download ${fileInfo.name}: ${response.code}")
-                            }
-
-                            val body = response.body ?: throw Exception("Empty body for ${fileInfo.name}")
-                            body.byteStream().use { inputStream ->
-                                FileOutputStream(partFile, startByte > 0).use { outputStream ->
-                                    val buffer = ByteArray(8192)
-                                    var read: Int
-                                    while (inputStream.read(buffer).also { read = it } != -1) {
-                                        if (!coroutineContext.isActive) throw CancellationException()
-                                        outputStream.write(buffer, 0, read)
-                                        downloadedBytes += read
-                                        modelStore.updateState(ModelState.Downloading(downloadedBytes, totalBytes, fileInfo.name))
+                    // Resume-capable transfer with retries: a stalled CDN connection must not fail a 300 MB download.
+                    var attempt = 0
+                    while (true) {
+                        val start = if (partFile.exists()) partFile.length() else 0L
+                        if (start >= fileInfo.sizeBytes) break
+                        try {
+                            // Fixed-size ranges: a connection that goes quiet only costs one chunk, not the whole file.
+                            val end = minOf(start + CHUNK_BYTES - 1, fileInfo.sizeBytes - 1)
+                            val requestBuilder = Request.Builder().url(fileInfo.url)
+                                .addHeader("Range", "bytes=$start-$end")
+                            client.newCall(requestBuilder.build()).execute().use { response ->
+                                if (!response.isSuccessful) {
+                                    val message = "Failed to download ${fileInfo.name}: ${response.code}"
+                                    // Server errors are transient (retry); client errors are not.
+                                    if (response.code >= 500) throw IOException(message) else throw Exception(message)
+                                }
+                                // A server that ignores Range answers 200 with the whole file: restart the part file.
+                                val resumed = start > 0 && response.code == 206
+                                if (start > 0 && response.code != 206) {
+                                    downloadedBytes -= start
+                                    partFile.delete()
+                                }
+                                val body = response.body ?: throw IOException("Empty body for ${fileInfo.name}")
+                                var lastReported = downloadedBytes
+                                body.byteStream().use { inputStream ->
+                                    FileOutputStream(partFile, resumed).use { outputStream ->
+                                        val buffer = ByteArray(64 * 1024)
+                                        var read: Int
+                                        while (inputStream.read(buffer).also { read = it } != -1) {
+                                            if (!coroutineContext.isActive) throw CancellationException()
+                                            outputStream.write(buffer, 0, read)
+                                            downloadedBytes += read
+                                            if (downloadedBytes - lastReported >= PROGRESS_STEP_BYTES) {
+                                                lastReported = downloadedBytes
+                                                modelStore.updateState(ModelState.Downloading(downloadedBytes, totalBytes, fileInfo.name))
+                                            }
+                                        }
                                     }
                                 }
+                                modelStore.updateState(ModelState.Downloading(downloadedBytes, totalBytes, fileInfo.name))
                             }
+                            attempt = 0 // chunk finished: only consecutive failures count against the limit
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: IOException) {
+                            attempt++
+                            if (attempt >= MAX_ATTEMPTS) throw e
+                            // Re-sync progress with what is actually on disk, then back off and resume.
+                            delay(RETRY_BASE_DELAY_MS * attempt)
                         }
                     }
 
@@ -113,5 +139,12 @@ class ModelDownloader(
                 modelStore.updateState(ModelState.Failed(e.message ?: "Unknown error"))
             }
         }
+    }
+
+    private companion object {
+        const val MAX_ATTEMPTS = 6
+        const val RETRY_BASE_DELAY_MS = 2_000L
+        const val PROGRESS_STEP_BYTES = 256L * 1024L
+        const val CHUNK_BYTES = 16L * 1024L * 1024L
     }
 }

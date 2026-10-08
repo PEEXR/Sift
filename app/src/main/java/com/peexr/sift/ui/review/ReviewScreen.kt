@@ -73,6 +73,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.semantics.Role
@@ -663,6 +664,7 @@ private fun ReviewBottomControlRow(
             contentColor = SiftTheme.extended.onRemoveAccent,
             shadowElevation = 8.dp,
             modifier = Modifier
+                .testTag("remove_button")
                 .size(80.dp)
                 .clip(CircleShape)
                 .clickable(
@@ -719,6 +721,7 @@ private fun ReviewBottomControlRow(
             contentColor = SiftTheme.extended.onKeepAccent,
             shadowElevation = 8.dp,
             modifier = Modifier
+                .testTag("keep_button")
                 .size(80.dp)
                 .clip(CircleShape)
                 .clickable(

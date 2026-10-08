@@ -23,6 +23,14 @@ class SiftApplication : Application() {
 
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    // The model CDN connection sometimes goes silent mid-transfer: fail fast and let the downloader resume.
+    private val downloadClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+    }
+
     private var downloadJob: Job? = null
 
     fun startModelDownload() {
@@ -30,7 +38,7 @@ class SiftApplication : Application() {
             if (downloadJob?.isActive == true) return
             downloadJob = appScope.launch {
                 try {
-                    ModelDownloader(modelStore, OkHttpClient()).downloadModels(wifiOnly = false)
+                    ModelDownloader(modelStore, downloadClient).downloadModels(wifiOnly = false)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (t: Throwable) {
