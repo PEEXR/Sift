@@ -6,6 +6,9 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateDpAsState
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -119,6 +122,27 @@ fun SettingsRoute(
         }
     }
 
+    val dateStr = remember {
+        SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+    }
+    val defaultBackupName = "sift-backup-$dateStr.json.gz"
+
+    val fullBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/gzip")
+    ) { uri ->
+        if (uri != null) {
+            viewModel.backupToUri(uri)
+        }
+    }
+
+    val fullRestoreLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.prepareRestoreFromUri(uri)
+        }
+    }
+
     BackHandler(onBack = onBack)
 
     SettingsScreen(
@@ -134,6 +158,10 @@ fun SettingsRoute(
         onExportCollections = { exportLauncher.launch("sift-collections.json") },
         onImportCollections = { importLauncher.launch(arrayOf("application/json", "text/plain")) },
         onSetIndexingQuality = viewModel::setIndexingQuality,
+        onBackupNow = { fullBackupLauncher.launch(defaultBackupName) },
+        onRestoreBackup = { fullRestoreLauncher.launch(arrayOf("application/gzip", "application/json", "*/*")) },
+        onConfirmRestore = viewModel::confirmRestore,
+        onDismissRestoreConfirm = viewModel::dismissRestoreConfirm,
         modifier = modifier
     )
 }
@@ -157,6 +185,10 @@ fun SettingsScreen(
     onExportCollections: () -> Unit,
     onImportCollections: () -> Unit,
     onSetIndexingQuality: (IndexingQuality) -> Unit = {},
+    onBackupNow: () -> Unit = {},
+    onRestoreBackup: () -> Unit = {},
+    onConfirmRestore: () -> Unit = {},
+    onDismissRestoreConfirm: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -540,6 +572,104 @@ fun SettingsScreen(
                 }
             }
 
+            // Section: Backup
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Text(
+                        text = "Backup",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+
+                    Text(
+                        text = "Save your index, collections and settings to a file. Restore it after reinstalling or on a new phone — no re-indexing needed. The smart-search model isn't included.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    val lastBackupText = if (uiState.lastBackupEpochSec != null) {
+                        val formattedDate = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
+                            .format(Date(uiState.lastBackupEpochSec * 1000L))
+                        "Last backup: $formattedDate"
+                    } else {
+                        "Last backup: Never"
+                    }
+
+                    Text(
+                        text = lastBackupText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    if (uiState.backupReminder != null) {
+                        Text(
+                            text = uiState.backupReminder,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+
+                    if (uiState.isOperating) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 2.5.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = onBackupNow,
+                            enabled = !uiState.isOperating,
+                            shape = CircleShape,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                        ) {
+                            Text("Back up now")
+                        }
+
+                        FilledTonalButton(
+                            onClick = onRestoreBackup,
+                            enabled = !uiState.isOperating,
+                            shape = CircleShape,
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                contentColor = MaterialTheme.colorScheme.onSurface
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                        ) {
+                            Text("Restore backup")
+                        }
+                    }
+                }
+            }
+
             // Section 3: Collections
             Card(
                 shape = RoundedCornerShape(24.dp),
@@ -859,6 +989,51 @@ fun SettingsScreen(
                     modifier = Modifier.heightIn(min = 48.dp)
                 ) {
                     Text("Close")
+                }
+            },
+            shape = RoundedCornerShape(24.dp)
+        )
+    }
+
+    // Confirm dialog for full backup restore
+    if (uiState.restoreConfirm != null) {
+        val confirmState = uiState.restoreConfirm
+        AlertDialog(
+            onDismissRequest = onDismissRestoreConfirm,
+            title = {
+                Text(
+                    text = "Restore backup?",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            },
+            text = {
+                Text(
+                    text = "${confirmState.screenshotCount} screenshots, ${confirmState.collectionCount} collections, saved ${confirmState.dateText}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = onConfirmRestore,
+                    shape = CircleShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    ),
+                    modifier = Modifier.heightIn(min = 48.dp)
+                ) {
+                    Text("Restore")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = onDismissRestoreConfirm,
+                    shape = CircleShape,
+                    modifier = Modifier.heightIn(min = 48.dp)
+                ) {
+                    Text("Cancel")
                 }
             },
             shape = RoundedCornerShape(24.dp)

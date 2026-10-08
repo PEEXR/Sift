@@ -22,7 +22,23 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import android.content.pm.PackageManager
+import android.os.Build
+import com.peexr.sift.data.backup.BackupSettings
+import com.peexr.sift.data.backup.FullBackup
+import com.peexr.sift.data.backup.backupReminderText
+import com.peexr.sift.data.backup.decodeFullBackup
+import java.text.NumberFormat
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.withContext
+
+data class RestoreConfirmDialogState(
+    val screenshotCount: Int,
+    val collectionCount: Int,
+    val dateText: String
+)
 
 data class SettingsUiState(
     val modelState: ModelState = ModelState.NotInstalled,
@@ -32,7 +48,10 @@ data class SettingsUiState(
     val autoFillSensitivity: AutoFillSensitivity = AutoFillSensitivity.BALANCED,
     val indexingQuality: IndexingQuality = IndexingQuality.AUTO,
     val measuredSecPerImageAt280: Double? = null,
-    val isOperating: Boolean = false
+    val isOperating: Boolean = false,
+    val lastBackupEpochSec: Long? = null,
+    val backupReminder: String? = null,
+    val restoreConfirm: RestoreConfirmDialogState? = null
 )
 
 class SettingsViewModel(
@@ -47,7 +66,13 @@ class SettingsViewModel(
             autoIndexNewScreenshots = app.settingsManager.autoIndexNewScreenshots,
             autoFillSensitivity = app.settingsManager.autoFillSensitivity,
             indexingQuality = app.settingsManager.indexingQuality,
-            measuredSecPerImageAt280 = app.settingsManager.measuredSecPerImageAt280
+            measuredSecPerImageAt280 = app.settingsManager.measuredSecPerImageAt280,
+            lastBackupEpochSec = app.settingsManager.lastBackupEpochSec,
+            backupReminder = backupReminderText(
+                lastBackupEpochSec = app.settingsManager.lastBackupEpochSec,
+                nowEpochSec = System.currentTimeMillis() / 1000L,
+                indexedCount = 0
+            )
         )
     )
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
@@ -70,10 +95,15 @@ class SettingsViewModel(
             try {
                 val stats = repository.libraryStats()
                 val measured = app.settingsManager.measuredSecPerImageAt280
+                val lastBackup = app.settingsManager.lastBackupEpochSec
+                val now = System.currentTimeMillis() / 1000L
+                val reminder = backupReminderText(lastBackup, now, stats.indexed)
                 _uiState.update {
                     it.copy(
                         libraryStats = stats,
-                        measuredSecPerImageAt280 = measured
+                        measuredSecPerImageAt280 = measured,
+                        lastBackupEpochSec = lastBackup,
+                        backupReminder = reminder
                     )
                 }
             } catch (e: CancellationException) {
@@ -197,6 +227,189 @@ class SettingsViewModel(
                 throw e
             } catch (t: Throwable) {
                 Log.e("SettingsViewModel", "Import failed", t)
+                _snackbarEvent.emit("That file isn't a Sift backup")
+            } finally {
+                _uiState.update { it.copy(isOperating = false) }
+            }
+        }
+    }
+
+    private fun getAppVersion(): String {
+        return try {
+            val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                app.packageManager.getPackageInfo(app.packageName, PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                app.packageManager.getPackageInfo(app.packageName, 0)
+            }
+            packageInfo.versionName ?: "1.0.0"
+        } catch (_: Exception) {
+            "1.0.0"
+        }
+    }
+
+    private var pendingRestoreBytes: ByteArray? = null
+    private var pendingRestoreBackup: FullBackup? = null
+
+    fun backupToUri(uri: Uri) {
+        viewModelScope.launch {
+            try {
+                _uiState.update { it.copy(isOperating = true) }
+                val nowEpochSec = System.currentTimeMillis() / 1000L
+                val settings = BackupSettings(
+                    autoFillSensitivity = app.settingsManager.autoFillSensitivity.name,
+                    indexingQuality = app.settingsManager.indexingQuality.name,
+                    autoIndexNewScreenshots = app.settingsManager.autoIndexNewScreenshots,
+                    measuredSecPerImageAt280 = app.settingsManager.measuredSecPerImageAt280
+                )
+                val bytes = repository.createFullBackup(
+                    appVersion = getAppVersion(),
+                    settings = settings
+                )
+                withContext(Dispatchers.IO) {
+                    app.contentResolver.openOutputStream(uri)?.use { os ->
+                        os.write(bytes)
+                        os.flush()
+                    } ?: error("Failed to open output stream for backup")
+                }
+                app.settingsManager.lastBackupEpochSec = nowEpochSec
+                val stats = repository.libraryStats()
+                val reminder = backupReminderText(nowEpochSec, nowEpochSec, stats.indexed)
+                _uiState.update {
+                    it.copy(
+                        lastBackupEpochSec = nowEpochSec,
+                        backupReminder = reminder
+                    )
+                }
+                _snackbarEvent.emit("Backup saved")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                Log.e("SettingsViewModel", "Backup failed", t)
+                _snackbarEvent.emit("Backup failed")
+            } finally {
+                _uiState.update { it.copy(isOperating = false) }
+            }
+        }
+    }
+
+    fun prepareRestoreFromUri(uri: Uri) {
+        viewModelScope.launch {
+            try {
+                _uiState.update { it.copy(isOperating = true) }
+                val bytes = withContext(Dispatchers.IO) {
+                    try {
+                        app.contentResolver.openInputStream(uri)?.use { inputStream ->
+                            inputStream.readBytes()
+                        } ?: error("Couldn't read that file")
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        throw IllegalArgumentException("Couldn't read that file", e)
+                    }
+                }
+                val decodeResult = decodeFullBackup(bytes)
+                if (decodeResult.isFailure) {
+                    _snackbarEvent.emit("That file isn't a Sift backup")
+                    return@launch
+                }
+                val backup = decodeResult.getOrThrow()
+                pendingRestoreBytes = bytes
+                pendingRestoreBackup = backup
+
+                val dateStr = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
+                    .format(Date(backup.createdAtEpochSec * 1000L))
+                _uiState.update {
+                    it.copy(
+                        restoreConfirm = RestoreConfirmDialogState(
+                            screenshotCount = backup.screenshots.size,
+                            collectionCount = backup.collections.size,
+                            dateText = dateStr
+                        )
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                Log.e("SettingsViewModel", "Prepare restore failed", t)
+                val msg = if (t.message == "Couldn't read that file") {
+                    "Couldn't read that file"
+                } else {
+                    "That file isn't a Sift backup"
+                }
+                _snackbarEvent.emit(msg)
+            } finally {
+                _uiState.update { it.copy(isOperating = false) }
+            }
+        }
+    }
+
+    fun dismissRestoreConfirm() {
+        pendingRestoreBytes = null
+        pendingRestoreBackup = null
+        _uiState.update { it.copy(restoreConfirm = null) }
+    }
+
+    fun confirmRestore() {
+        val bytes = pendingRestoreBytes ?: return
+        val backup = pendingRestoreBackup ?: return
+        pendingRestoreBytes = null
+        pendingRestoreBackup = null
+
+        viewModelScope.launch {
+            try {
+                _uiState.update { it.copy(isOperating = true, restoreConfirm = null) }
+                val result = repository.restoreFullBackup(bytes)
+                result.fold(
+                    onSuccess = { summary ->
+                        val backupSettings = backup.settings
+                        val restoredSensitivity = try {
+                            AutoFillSensitivity.valueOf(backupSettings.autoFillSensitivity)
+                        } catch (_: Exception) {
+                            AutoFillSensitivity.BALANCED
+                        }
+                        app.settingsManager.autoFillSensitivity = restoredSensitivity
+
+                        val restoredQuality = try {
+                            IndexingQuality.valueOf(backupSettings.indexingQuality)
+                        } catch (_: Exception) {
+                            IndexingQuality.AUTO
+                        }
+                        app.settingsManager.indexingQuality = restoredQuality
+
+                        app.settingsManager.autoIndexNewScreenshots = backupSettings.autoIndexNewScreenshots
+                        EmbeddingScheduler.syncAutoIndexSchedule(app, backupSettings.autoIndexNewScreenshots)
+
+                        if (app.settingsManager.measuredSecPerImageAt280 == null && backupSettings.measuredSecPerImageAt280 != null) {
+                            app.settingsManager.measuredSecPerImageAt280 = backupSettings.measuredSecPerImageAt280
+                        }
+
+                        val stats = repository.libraryStats()
+                        val pending = stats.total - stats.indexed
+                        if (pending > 0 && app.modelStore.isInstalled()) {
+                            EmbeddingScheduler.enqueueIndexingNow(app, replace = false)
+                        }
+
+                        val totalCollections = summary.collectionsCreated + summary.collectionsReused
+                        val formattedMatched = NumberFormat.getIntegerInstance().format(summary.screenshotsMatched)
+                        val unmatchedMsg = if (summary.screenshotsUnmatched > 0) {
+                            " ${NumberFormat.getIntegerInstance().format(summary.screenshotsUnmatched)} screenshots in the backup weren't found on this phone."
+                        } else {
+                            ""
+                        }
+                        val msg = "Restored $formattedMatched screenshots, $totalCollections collections.$unmatchedMsg"
+                        _snackbarEvent.emit(msg)
+                        refreshStats()
+                    },
+                    onFailure = { t ->
+                        Log.e("SettingsViewModel", "Restore failed", t)
+                        _snackbarEvent.emit("That file isn't a Sift backup")
+                    }
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                Log.e("SettingsViewModel", "Restore failed", t)
                 _snackbarEvent.emit("That file isn't a Sift backup")
             } finally {
                 _uiState.update { it.copy(isOperating = false) }

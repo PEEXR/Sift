@@ -245,3 +245,63 @@ data class CandidateScreenshotRow(
     val sizeBytes: Long
 )
 
+data class BackupScreenshotRow(
+    val id: Long,
+    val displayName: String,
+    val dateAdded: Long,
+    val sizeBytes: Long,
+    val ocrText: String,
+    val visualLabels: String,
+    val isProcessed: Boolean,
+    val embedding: ByteArray?
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+
+        other as BackupScreenshotRow
+
+        if (id != other.id) return false
+        if (displayName != other.displayName) return false
+        if (dateAdded != other.dateAdded) return false
+        if (sizeBytes != other.sizeBytes) return false
+        if (ocrText != other.ocrText) return false
+        if (visualLabels != other.visualLabels) return false
+        if (isProcessed != other.isProcessed) return false
+        if (embedding != null) {
+            if (other.embedding == null) return false
+            if (!embedding.contentEquals(other.embedding)) return false
+        } else if (other.embedding != null) return false
+
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = id.hashCode()
+        result = 31 * result + displayName.hashCode()
+        result = 31 * result + dateAdded.hashCode()
+        result = 31 * result + sizeBytes.hashCode()
+        result = 31 * result + ocrText.hashCode()
+        result = 31 * result + visualLabels.hashCode()
+        result = 31 * result + isProcessed.hashCode()
+        result = 31 * result + (embedding?.contentHashCode() ?: 0)
+        return result
+    }
+}
+
+data class BackupFullMembershipRow(
+    val screenshotId: Long,
+    val collectionId: String,
+    val source: String,
+    val score: Float?
+)
+
+data class RestoreCandidateRow(
+    val id: Long,
+    val displayName: String,
+    val dateAdded: Long,
+    val sizeBytes: Long,
+    val isProcessed: Boolean,
+    val hasEmbedding: Boolean
+)
+

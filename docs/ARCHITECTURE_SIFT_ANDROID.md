@@ -14,7 +14,8 @@ com.peexr.sift/
 │   ├── api/                        # Remote API integration
 │   │   └── JevApiClient.kt         # TypeSafe/OpenRouter client (retained; unused by UI)
 │   ├── backup/                     # Portability & serialization
-│   │   └── CollectionsBackup.kt    # JSON export/import matched by name, timestamp, and size
+│   │   ├── CollectionsBackup.kt    # JSON export/import matched by name, timestamp, and size
+│   │   └── FullBackup.kt           # Full library backup & restore (GZIP JSON, Base64 128-d vectors)
 │   ├── cleanup/                    # Deletion heuristics
 │   │   └── CleanupRules.kt         # Age filters, OTP regex, burst near-duplicate grouping
 │   ├── collections/                # Collection auto-population
@@ -109,3 +110,9 @@ com.peexr.sift/
 2. **Review Triage:** Users swipe through candidates. Swipe left marks for deletion; swipe right keeps.
 3. **Summary Audit:** Once the stack is cleared, the Summary card outlines total files and reclaimable storage.
 4. **System Deletion:** A single user confirmation invokes `MediaStore.createDeleteRequest()` to trigger the official system-managed deletion dialog.
+
+### Full Backup & Restore
+1. **Format:** Single JSON document optionally GZIP-compressed (`.json.gz`), using Base64 strings for 128-d little-endian float embedding vectors. Plain JSON and gzipped backups are both accepted on restore via magic byte inspection (`0x1F 0x8B`).
+2. **What Is & Isn't Included:** Includes OCR text, visual labels, embeddings, collections, membership cross-refs (AUTO/MANUAL/EXCLUDED with scores), and user settings. Excludes AI model binaries (which re-download on demand) and raw image files (which remain in device MediaStore).
+3. **Matching Rule:** Screenshots are matched to on-device MediaStore images by exact `(displayName, dateAdded, sizeBytes)` triple; duplicate candidates map one-to-one in candidate order. Existing on-device indexing is never overwritten (preserving newer work), and existing manual/excluded memberships are never downgraded to auto.
+4. **Privacy:** Backups are written to and read from user-chosen locations via the Android Storage Access Framework (SAF). The app never uploads any data to external servers.

@@ -50,6 +50,7 @@ class SettingsScreenTest {
         composeTestRule.onNodeWithText("Smart search").assertIsDisplayed()
         composeTestRule.onNodeWithText("Indexing").assertIsDisplayed()
         composeTestRule.onNodeWithText("Indexing quality").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("Backup").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("Collections").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("About").performScrollTo().assertIsDisplayed()
     }
@@ -225,5 +226,41 @@ class SettingsScreenTest {
         // Tap Best
         composeTestRule.onNodeWithText("Best").performScrollTo().performClick()
         assertEquals(IndexingQuality.BEST, selectedQuality)
+    }
+
+    @Test
+    fun backupCard_rendersAndInvokesCallbacks() {
+        var backupNowCalled = false
+        var restoreBackupCalled = false
+        val state = SettingsUiState(lastBackupEpochSec = null)
+
+        composeTestRule.setContent {
+            SiftTheme {
+                SettingsScreen(
+                    uiState = state,
+                    snackbarHostState = SnackbarHostState(),
+                    onBack = {},
+                    onStartModelDownload = {},
+                    onRemoveModel = {},
+                    onSetAutoIndexEnabled = {},
+                    onIndexNow = {},
+                    onReindexEverything = {},
+                    onSetAutoFillSensitivity = {},
+                    onExportCollections = {},
+                    onImportCollections = {},
+                    onBackupNow = { backupNowCalled = true },
+                    onRestoreBackup = { restoreBackupCalled = true }
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithText("Backup").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("Last backup: Never").performScrollTo().assertIsDisplayed()
+
+        composeTestRule.onNodeWithText("Back up now").performScrollTo().performClick()
+        assertTrue(backupNowCalled)
+
+        composeTestRule.onNodeWithText("Restore backup").performScrollTo().performClick()
+        assertTrue(restoreBackupCalled)
     }
 }

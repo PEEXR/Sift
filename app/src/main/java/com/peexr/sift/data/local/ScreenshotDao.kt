@@ -247,4 +247,23 @@ interface ScreenshotDao {
 
     @Query("SELECT COUNT(*) FROM screenshots WHERE isProcessed = 1 AND embedding IS NOT NULL")
     suspend fun countIndexed(): Int
+
+    // Full Backup & Restore
+    @Query("SELECT id, displayName, dateAdded, sizeBytes, ocrText, visualLabels, isProcessed, embedding FROM screenshots")
+    suspend fun getAllForBackup(): List<BackupScreenshotRow>
+
+    @Query("SELECT screenshotId, collectionId, source, score FROM screenshot_collections")
+    suspend fun getAllMemberships(): List<BackupFullMembershipRow>
+
+    @Query("SELECT id, displayName, dateAdded, sizeBytes, isProcessed, (embedding IS NOT NULL) AS hasEmbedding FROM screenshots")
+    suspend fun getAllCandidatesForRestore(): List<RestoreCandidateRow>
+
+    @Query("UPDATE screenshots SET ocrText = :ocrText, visualLabels = :visualLabels, isProcessed = :isProcessed, embedding = :embedding WHERE id = :id")
+    suspend fun updateRestoredScreenshot(
+        id: Long,
+        ocrText: String,
+        visualLabels: String,
+        isProcessed: Boolean,
+        embedding: ByteArray?
+    )
 }

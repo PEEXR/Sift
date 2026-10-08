@@ -52,11 +52,24 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import com.peexr.sift.data.backup.BackupCollection
 import com.peexr.sift.data.backup.BackupFile
+import com.peexr.sift.data.backup.BackupSettings
 import com.peexr.sift.data.backup.Candidate
+import com.peexr.sift.data.backup.FullBackup
+import com.peexr.sift.data.backup.FullCollection
+import com.peexr.sift.data.backup.FullMembership
+import com.peexr.sift.data.backup.FullScreenshot
+import com.peexr.sift.data.backup.RestoreSummary
 import com.peexr.sift.data.backup.ScreenshotRef
 import com.peexr.sift.data.backup.decodeBackup
+import com.peexr.sift.data.backup.decodeFullBackup
+import com.peexr.sift.data.backup.embeddingFromBase64
+import com.peexr.sift.data.backup.embeddingToBase64
 import com.peexr.sift.data.backup.encodeBackup
+import com.peexr.sift.data.backup.encodeFullBackup
 import com.peexr.sift.data.backup.matchRefs
+import com.peexr.sift.data.backup.restoreMatches
+import com.peexr.sift.data.search.toByteArray
+import androidx.room.withTransaction
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -857,6 +870,192 @@ class ScreenshotRepository(
             total = dao.countAll(),
             indexed = dao.countIndexed()
         )
+    }
+
+    suspend fun createFullBackup(appVersion: String, settings: BackupSettings): ByteArray = withContext(Dispatchers.IO) {
+        val screenshots = dao.getAllForBackup()
+        val collections = dao.getAllCollections()
+        val memberships = dao.getAllMemberships()
+
+        val membershipsByScreenshot = memberships.groupBy { it.screenshotId }
+
+        val fullCollections = collections.map { col ->
+            FullCollection(
+                key = col.id,
+                name = col.name,
+                description = col.description,
+                colorHex = col.colorHex,
+                autoFill = col.autoFill
+            )
+        }
+
+        val fullScreenshots = screenshots.map { row ->
+            val shotMemberships = (membershipsByScreenshot[row.id] ?: emptyList()).map { mem ->
+                FullMembership(
+                    collectionKey = mem.collectionId,
+                    source = mem.source,
+                    score = mem.score
+                )
+            }
+            val b64 = row.embedding?.let { bytes ->
+                try {
+                    val floats = bytes.toFloatArray()
+                    if (floats.size == 128) embeddingToBase64(floats) else null
+                } catch (_: Exception) {
+                    null
+                }
+            }
+            FullScreenshot(
+                displayName = row.displayName,
+                dateAdded = row.dateAdded,
+                sizeBytes = row.sizeBytes,
+                ocrText = row.ocrText,
+                visualLabels = row.visualLabels,
+                isProcessed = row.isProcessed,
+                embeddingB64 = b64,
+                memberships = shotMemberships
+            )
+        }
+
+        val backup = FullBackup(
+            version = 1,
+            createdAtEpochSec = System.currentTimeMillis() / 1000L,
+            appVersion = appVersion,
+            settings = settings,
+            collections = fullCollections,
+            screenshots = fullScreenshots
+        )
+
+        encodeFullBackup(backup)
+    }
+
+    suspend fun restoreFullBackup(bytes: ByteArray): Result<RestoreSummary> = withContext(Dispatchers.IO) {
+        val backup = decodeFullBackup(bytes).getOrElse { return@withContext Result.failure(it) }
+
+        try {
+            val summary = database.withTransaction {
+                val candidateRows = dao.getAllCandidatesForRestore()
+                val candidateMapById = candidateRows.associateBy { it.id }
+
+                val candidates = candidateRows.map {
+                    Candidate(
+                        id = it.id,
+                        displayName = it.displayName,
+                        dateAdded = it.dateAdded,
+                        sizeBytes = it.sizeBytes
+                    )
+                }
+
+                val refs = backup.screenshots.map { it.toRefKey() }
+                val matchedIds = restoreMatches(refs, candidates)
+
+                // Manage Collections (case-insensitive name match)
+                val existingCollections = dao.getAllCollections()
+                val existingNames = existingCollections.associateBy { it.name.trim().lowercase() }.toMutableMap()
+                val collectionKeyToTargetId = mutableMapOf<String, String>()
+
+                var collectionsCreated = 0
+                var collectionsReused = 0
+
+                for (col in backup.collections) {
+                    val normName = col.name.trim().lowercase()
+                    val existing = existingNames[normName]
+                    if (existing != null) {
+                        collectionsReused++
+                        collectionKeyToTargetId[col.key] = existing.id
+                    } else {
+                        val newId = col.name.lowercase().replace("\\s+".toRegex(), "_") + "_" + System.currentTimeMillis() + "_" + (collectionsCreated + 1)
+                        val entity = CollectionEntity(
+                            id = newId,
+                            name = col.name,
+                            description = col.description,
+                            colorHex = col.colorHex,
+                            autoFill = col.autoFill
+                        )
+                        dao.insertCollection(entity)
+                        collectionsCreated++
+                        existingNames[normName] = entity
+                        collectionKeyToTargetId[col.key] = newId
+                    }
+                }
+
+                // Manage existing memberships to prevent downgrade
+                val currentMemberships = dao.getAllMemberships()
+                val currentMembershipMap = currentMemberships.associateBy { Pair(it.screenshotId, it.collectionId) }
+
+                var screenshotsMatched = 0
+                var screenshotsUnmatched = 0
+                var embeddingsRestored = 0
+                var membershipsApplied = 0
+
+                for (i in backup.screenshots.indices) {
+                    val shot = backup.screenshots[i]
+                    val matchedId = matchedIds[i]
+                    if (matchedId == null) {
+                        screenshotsUnmatched++
+                        continue
+                    }
+                    screenshotsMatched++
+
+                    val current = candidateMapById[matchedId]
+                    val needsRestoration = current == null || !current.hasEmbedding || !current.isProcessed
+
+                    val restoredFloats = shot.embeddingB64?.let { embeddingFromBase64(it) }
+                    // A blank, unprocessed backup entry carries nothing worth writing over current data.
+                    if (needsRestoration && (shot.isProcessed || restoredFloats != null)) {
+                        val embeddingBytes = restoredFloats?.toByteArray()
+                        if (embeddingBytes != null) {
+                            embeddingsRestored++
+                        }
+                        dao.updateRestoredScreenshot(
+                            id = matchedId,
+                            ocrText = shot.ocrText,
+                            visualLabels = shot.visualLabels,
+                            isProcessed = shot.isProcessed,
+                            embedding = embeddingBytes
+                        )
+                    }
+
+                    // Memberships for this matched screenshot
+                    for (mem in shot.memberships) {
+                        val targetColId = collectionKeyToTargetId[mem.collectionKey] ?: continue
+                        val existingMem = currentMembershipMap[Pair(matchedId, targetColId)]
+
+                        val isExistingManualOrExcluded = existingMem != null &&
+                            (existingMem.source == MembershipSource.MANUAL || existingMem.source == MembershipSource.EXCLUDED)
+
+                        // Never downgrade an existing MANUAL/EXCLUDED to AUTO
+                        if (isExistingManualOrExcluded && mem.source == MembershipSource.AUTO) {
+                            continue
+                        }
+
+                        dao.upsertMembership(
+                            ScreenshotCollectionCrossRef(
+                                screenshotId = matchedId,
+                                collectionId = targetColId,
+                                source = mem.source,
+                                score = mem.score
+                            )
+                        )
+                        membershipsApplied++
+                    }
+                }
+
+                RestoreSummary(
+                    screenshotsMatched = screenshotsMatched,
+                    screenshotsUnmatched = screenshotsUnmatched,
+                    embeddingsRestored = embeddingsRestored,
+                    collectionsCreated = collectionsCreated,
+                    collectionsReused = collectionsReused,
+                    membershipsApplied = membershipsApplied
+                )
+            }
+            Result.success(summary)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
     }
 }
 

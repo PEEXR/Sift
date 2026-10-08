@@ -63,4 +63,18 @@ class SettingsManager(context: Context) {
     var onboardingDone: Boolean
         get() = prefs.getBoolean("onboarding_done", false)
         set(value) = prefs.edit().putBoolean("onboarding_done", value).apply()
+
+    var lastBackupEpochSec: Long?
+        get() {
+            if (!prefs.contains("last_backup_epoch_sec")) return null
+            val value = prefs.getLong("last_backup_epoch_sec", -1L)
+            return if (value >= 0L) value else null
+        }
+        set(value) {
+            if (value != null && value >= 0L) {
+                prefs.edit().putLong("last_backup_epoch_sec", value).apply()
+            } else {
+                prefs.edit().remove("last_backup_epoch_sec").apply()
+            }
+        }
 }
