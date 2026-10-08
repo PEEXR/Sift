@@ -87,6 +87,37 @@ data class EmbeddingRow(
     }
 }
 
+data class EmbeddedRow(
+    val id: Long,
+    val dateAdded: Long,
+    val embedding: ByteArray
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+
+        other as EmbeddedRow
+
+        if (id != other.id) return false
+        if (dateAdded != other.dateAdded) return false
+        if (!embedding.contentEquals(other.embedding)) return false
+
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = id.hashCode()
+        result = 31 * result + dateAdded.hashCode()
+        result = 31 * result + embedding.contentHashCode()
+        return result
+    }
+}
+
+data class OcrRow(
+    val id: Long,
+    val ocrText: String
+)
+
 data class ScreenshotUriRow(
     val id: Long,
     val uri: String

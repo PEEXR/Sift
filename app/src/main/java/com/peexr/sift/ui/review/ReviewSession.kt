@@ -73,12 +73,21 @@ fun splitSearchResults(results: List<ScreenshotItem>): SearchStack {
 }
 
 /**
- * Review mode: Picker (default), Collection triage, or Search triage.
+ * Presets for automated cleanup review.
+ */
+enum class CleanupPreset {
+    CODES,
+    DUPLICATES
+}
+
+/**
+ * Review mode: Picker (default), Collection triage, Search triage, or Cleanup triage.
  */
 sealed interface ReviewMode {
     data object Picker : ReviewMode
     data class Collection(val id: String, val name: String) : ReviewMode
     data class Search(val query: String) : ReviewMode
+    data class Cleanup(val preset: CleanupPreset) : ReviewMode
 }
 
 /**
@@ -117,6 +126,7 @@ sealed interface ReviewAction {
     data class SetCollections(val collections: List<CollectionSummary>) : ReviewAction
     data class StartCollection(val id: String, val name: String, val cards: List<ReviewCard>) : ReviewAction
     data class StartSearch(val query: String, val searchStack: SearchStack) : ReviewAction
+    data class StartCleanup(val preset: CleanupPreset, val cards: List<ReviewCard>) : ReviewAction
     data class SetQuery(val query: String) : ReviewAction
     data object SetLoading : ReviewAction
     data object Keep : ReviewAction
@@ -159,7 +169,7 @@ data class ReviewSession(
         get() = (stack.size - index).coerceAtLeast(0)
 
     val showMarkRemaining: Boolean
-        get() = mode is ReviewMode.Search &&
+        get() = (mode is ReviewMode.Search || mode is ReviewMode.Cleanup) &&
                 phase == ReviewPhase.Swiping &&
                 stack.isNotEmpty() &&
                 index < stack.size &&
@@ -207,6 +217,23 @@ fun ReviewSession.apply(action: ReviewAction): ReviewSession {
             )
         }
 
+        is ReviewAction.StartCleanup -> {
+            val prev = if (mode is ReviewMode.Collection) mode else previousCollection
+            copy(
+                mode = ReviewMode.Cleanup(action.preset),
+                query = "",
+                stack = action.cards,
+                index = 0,
+                kept = 0,
+                removed = 0,
+                deleted = 0,
+                marked = emptySet(),
+                history = emptyList(),
+                previousCollection = prev,
+                phase = if (action.cards.isEmpty()) ReviewPhase.Empty else ReviewPhase.Swiping
+            )
+        }
+
         is ReviewAction.SetQuery -> {
             copy(query = action.query)
         }
@@ -222,7 +249,7 @@ fun ReviewSession.apply(action: ReviewAction): ReviewSession {
             val nextKept = kept + 1
             val step = ReviewStep(kind = StepKind.KEEP, card = current, previousIndex = index)
             val nextPhase = if (nextIndex >= stack.size) {
-                if (mode is ReviewMode.Search) ReviewPhase.Summary else ReviewPhase.Done
+                if (mode is ReviewMode.Search || mode is ReviewMode.Cleanup) ReviewPhase.Summary else ReviewPhase.Done
             } else {
                 ReviewPhase.Swiping
             }
@@ -238,7 +265,7 @@ fun ReviewSession.apply(action: ReviewAction): ReviewSession {
             if (index >= stack.size || phase != ReviewPhase.Swiping) return this
             val current = stack[index]
             val nextIndex = index + 1
-            if (mode is ReviewMode.Search) {
+            if (mode is ReviewMode.Search || mode is ReviewMode.Cleanup) {
                 val nextMarked = marked + current.item.id
                 val step = ReviewStep(kind = StepKind.MARK, card = current, previousIndex = index)
                 val nextPhase = if (nextIndex >= stack.size) ReviewPhase.Summary else ReviewPhase.Swiping
@@ -262,7 +289,7 @@ fun ReviewSession.apply(action: ReviewAction): ReviewSession {
         }
 
         is ReviewAction.MarkRemaining -> {
-            if (mode !is ReviewMode.Search || phase != ReviewPhase.Swiping || index >= stack.size) return this
+            if ((mode !is ReviewMode.Search && mode !is ReviewMode.Cleanup) || phase != ReviewPhase.Swiping || index >= stack.size) return this
             val remaining = stack.subList(index, stack.size)
             val remainingIds = remaining.map { it.item.id }.toSet()
             val step = ReviewStep(kind = StepKind.MARK_REMAINING, cards = remaining, previousIndex = index)
@@ -359,7 +386,7 @@ fun ReviewSession.apply(action: ReviewAction): ReviewSession {
         }
 
         is ReviewAction.Back, is ReviewAction.ClearSearch -> {
-            if (mode is ReviewMode.Search) {
+            if (mode is ReviewMode.Search || mode is ReviewMode.Cleanup) {
                 if (previousCollection != null) {
                     copy(
                         mode = previousCollection,

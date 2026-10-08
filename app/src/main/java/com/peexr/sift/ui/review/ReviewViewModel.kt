@@ -6,6 +6,9 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.peexr.sift.data.cleanup.AgeFilter
+import com.peexr.sift.data.cleanup.CodeKind
+import com.peexr.sift.data.cleanup.isOlderThan
 import com.peexr.sift.data.model.CollectionSummary
 import com.peexr.sift.data.model.ScreenshotItem
 import com.peexr.sift.data.repository.ScreenshotRepository
@@ -39,7 +42,9 @@ data class ReviewUiState(
     val statusToast: String? = null,
     val deletePendingIntent: PendingIntent? = null,
     val markedTotalBytes: Long = 0L,
-    val showMarkRemaining: Boolean = false
+    val showMarkRemaining: Boolean = false,
+    val ageFilter: AgeFilter = AgeFilter.ANY,
+    val loadingCleanupPreset: CleanupPreset? = null
 )
 
 class ReviewViewModel(
@@ -49,8 +54,11 @@ class ReviewViewModel(
     private val _session = MutableStateFlow(ReviewSession())
     private val _statusToast = MutableStateFlow<String?>(null)
     private val _deletePendingIntent = MutableStateFlow<PendingIntent?>(null)
+    private val _ageFilter = MutableStateFlow(AgeFilter.ANY)
+    private val _loadingCleanupPreset = MutableStateFlow<CleanupPreset?>(null)
     private var pendingSingleDeleteId: Long? = null
     private var searchJob: Job? = null
+    private var cleanupJob: Job? = null
     private var toastJob: Job? = null
 
     init {
@@ -64,8 +72,10 @@ class ReviewViewModel(
     val uiState: StateFlow<ReviewUiState> = combine(
         _session,
         _statusToast,
-        _deletePendingIntent
-    ) { session, toast, pendingIntent ->
+        _deletePendingIntent,
+        _ageFilter,
+        _loadingCleanupPreset
+    ) { session, toast, pendingIntent, ageFilter, loadingPreset ->
         val markedBytes = session.stack
             .filter { session.marked.contains(it.item.id) }
             .sumOf { it.item.sizeBytes }
@@ -85,7 +95,9 @@ class ReviewViewModel(
             statusToast = toast,
             deletePendingIntent = pendingIntent,
             markedTotalBytes = markedBytes,
-            showMarkRemaining = session.showMarkRemaining
+            showMarkRemaining = session.showMarkRemaining,
+            ageFilter = ageFilter,
+            loadingCleanupPreset = loadingPreset
         )
     }.stateIn(
         scope = viewModelScope,
@@ -107,6 +119,8 @@ class ReviewViewModel(
     }
 
     fun openCollection(collectionId: String) {
+        searchJob?.cancel()
+        cleanupJob?.cancel()
         viewModelScope.launch {
             try {
                 val queue = repository.getReviewQueue(collectionId)
@@ -145,13 +159,19 @@ class ReviewViewModel(
         if (trimmed.isBlank()) return
 
         searchJob?.cancel()
+        cleanupJob?.cancel()
         dispatch(ReviewAction.SetQuery(trimmed))
         dispatch(ReviewAction.SetLoading)
 
         searchJob = viewModelScope.launch {
             try {
                 val entities = repository.hybridSearch(trimmed, limit = 60)
-                val items = repository.mapToDomainModel(entities)
+                val nowSeconds = System.currentTimeMillis() / 1000L
+                val currentAge = _ageFilter.value
+                val filteredEntities = entities.filter {
+                    isOlderThan(it.dateAdded, nowSeconds, currentAge.days)
+                }
+                val items = repository.mapToDomainModel(filteredEntities)
                 val searchStack = splitSearchResults(items)
                 dispatch(ReviewAction.StartSearch(query = trimmed, searchStack = searchStack))
             } catch (e: CancellationException) {
@@ -163,8 +183,92 @@ class ReviewViewModel(
         }
     }
 
+    fun setAgeFilter(filter: AgeFilter) {
+        _ageFilter.value = filter
+        val currentMode = _session.value.mode
+        when (currentMode) {
+            is ReviewMode.Search -> {
+                submitSearch(currentMode.query)
+            }
+            is ReviewMode.Cleanup -> {
+                if (currentMode.preset == CleanupPreset.CODES) {
+                    startCleanup(CleanupPreset.CODES, showLoadingPhase = true)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    fun startCleanup(preset: CleanupPreset, showLoadingPhase: Boolean = false) {
+        searchJob?.cancel()
+        cleanupJob?.cancel()
+
+        if (showLoadingPhase) {
+            dispatch(ReviewAction.SetLoading)
+        } else {
+            _loadingCleanupPreset.value = preset
+        }
+
+        cleanupJob = viewModelScope.launch {
+            try {
+                when (preset) {
+                    CleanupPreset.CODES -> {
+                        val matches = repository.findCodeScreenshots()
+                        val nowSeconds = System.currentTimeMillis() / 1000L
+                        val currentAge = _ageFilter.value
+                        val filteredMatches = matches.filter {
+                            isOlderThan(it.entity.dateAdded, nowSeconds, currentAge.days)
+                        }
+                        val entities = filteredMatches.map { it.entity }
+                        val domainItems = repository.mapToDomainModel(entities)
+                        val kindById = filteredMatches.associate { it.entity.id to it.kind }
+
+                        val cards = domainItems.map { item ->
+                            val kind = kindById[item.id] ?: CodeKind.OTP
+                            val isOlderThan7Days = isOlderThan(item.dateAdded, nowSeconds, 7)
+                            val label = when (kind) {
+                                CodeKind.OTP -> "One-time code"
+                                CodeKind.EXPIRING -> "Expiring"
+                            }
+                            ReviewCard(
+                                item = item,
+                                confidenceLabel = label,
+                                isStrong = isOlderThan7Days
+                            )
+                        }
+                        val unsureCards = cards.filter { !it.isStrong }
+                        val strongCards = cards.filter { it.isStrong }
+                        val orderedStack = unsureCards + strongCards
+                        dispatch(ReviewAction.StartCleanup(CleanupPreset.CODES, orderedStack))
+                    }
+
+                    CleanupPreset.DUPLICATES -> {
+                        val entities = repository.findDuplicateScreenshots()
+                        val domainItems = repository.mapToDomainModel(entities)
+                        val cards = domainItems.map { item ->
+                            ReviewCard(
+                                item = item,
+                                confidenceLabel = "Near-duplicate",
+                                isStrong = true
+                            )
+                        }
+                        dispatch(ReviewAction.StartCleanup(CleanupPreset.DUPLICATES, cards))
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                Log.e("ReviewViewModel", "Cleanup failed for preset $preset", t)
+                dispatch(ReviewAction.StartCleanup(preset, emptyList()))
+            } finally {
+                _loadingCleanupPreset.value = null
+            }
+        }
+    }
+
     fun clearSearch() {
         searchJob?.cancel()
+        cleanupJob?.cancel()
         dispatch(ReviewAction.ClearSearch)
     }
 

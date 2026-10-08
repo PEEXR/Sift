@@ -84,6 +84,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.peexr.sift.data.cleanup.AgeFilter
 import com.peexr.sift.data.model.ScreenshotItem
 import com.peexr.sift.ui.collections.formatBytes
 import com.peexr.sift.ui.navigation.FloatingNavClearance
@@ -152,6 +153,8 @@ fun ReviewRoute(
         onClearMarks = viewModel::clearMarks,
         onRestart = viewModel::restart,
         onBack = viewModel::back,
+        onAgeFilterChange = viewModel::setAgeFilter,
+        onStartCleanup = viewModel::startCleanup,
         onOpenScreenshot = onOpenScreenshot,
         onNavigateToCollections = onNavigateToCollections,
         modifier = modifier
@@ -177,6 +180,8 @@ fun ReviewScreen(
     onClearMarks: () -> Unit,
     onRestart: () -> Unit,
     onBack: () -> Unit,
+    onAgeFilterChange: (AgeFilter) -> Unit = {},
+    onStartCleanup: (CleanupPreset) -> Unit = {},
     onOpenScreenshot: (ScreenshotItem) -> Unit,
     onNavigateToCollections: () -> Unit,
     modifier: Modifier = Modifier
@@ -227,6 +232,9 @@ fun ReviewScreen(
                 // Header & Search Pill Block
                 ReviewHeaderBlock(
                     mode = uiState.mode,
+                    phase = uiState.phase,
+                    ageFilter = uiState.ageFilter,
+                    onAgeFilterChange = onAgeFilterChange,
                     query = searchInput,
                     onQueryChange = { searchInput = it },
                     onSubmitSearch = { onSubmitSearch(searchInput) },
@@ -244,6 +252,10 @@ fun ReviewScreen(
                     is ReviewMode.Picker -> {
                         ReviewPicker(
                             collections = uiState.collections,
+                            ageFilter = uiState.ageFilter,
+                            onAgeFilterChange = onAgeFilterChange,
+                            loadingCleanupPreset = uiState.loadingCleanupPreset,
+                            onStartCleanup = onStartCleanup,
                             onSelectCollection = onOpenCollection,
                             onSelectSuggestion = { suggestion ->
                                 searchInput = suggestion
@@ -254,7 +266,7 @@ fun ReviewScreen(
                         )
                     }
 
-                    is ReviewMode.Collection, is ReviewMode.Search -> {
+                    is ReviewMode.Collection, is ReviewMode.Search, is ReviewMode.Cleanup -> {
                         Box(
                             modifier = Modifier
                                 .weight(1f)
@@ -268,10 +280,10 @@ fun ReviewScreen(
                                 }
 
                                 is ReviewPhase.Empty -> {
-                                    val emptyMessage = if (uiState.mode is ReviewMode.Search) {
-                                        "No matches. Try different words."
-                                    } else {
-                                        "All caught up in this collection!"
+                                    val emptyMessage = when (uiState.mode) {
+                                        is ReviewMode.Search -> "No matches. Try different words."
+                                        is ReviewMode.Cleanup -> "Nothing to clean here"
+                                        else -> "All caught up in this collection!"
                                     }
                                     ReviewEmptyCard(
                                         message = emptyMessage,
@@ -289,7 +301,7 @@ fun ReviewScreen(
                                         SwipeCardStack(
                                             stack = uiState.stack,
                                             index = uiState.index,
-                                            isSearchMode = uiState.mode is ReviewMode.Search,
+                                            isSearchMode = uiState.mode is ReviewMode.Search || uiState.mode is ReviewMode.Cleanup,
                                             onKeep = onKeep,
                                             onRemove = onRemoveOrMark,
                                             onOpenScreenshot = onOpenScreenshot,
@@ -388,6 +400,7 @@ fun ReviewScreen(
                                 is ReviewPhase.Freed -> {
                                     SearchFreedCard(
                                         bytesFreed = uiState.phase.bytes,
+                                        isCleanup = uiState.mode is ReviewMode.Cleanup,
                                         onNewSearch = onClearSearch,
                                         modifier = Modifier.padding(bottom = FloatingNavClearance)
                                     )
@@ -407,6 +420,9 @@ fun ReviewScreen(
 @Composable
 private fun ReviewHeaderBlock(
     mode: ReviewMode,
+    phase: ReviewPhase,
+    ageFilter: AgeFilter,
+    onAgeFilterChange: (AgeFilter) -> Unit,
     query: String,
     onQueryChange: (String) -> Unit,
     onSubmitSearch: () -> Unit,
@@ -550,6 +566,10 @@ private fun ReviewHeaderBlock(
             val contextLabel = when (mode) {
                 is ReviewMode.Collection -> "${mode.name} \u00B7 least sure first"
                 is ReviewMode.Search -> "$total matches for \u201C${mode.query}\u201D \u00B7 least sure first"
+                is ReviewMode.Cleanup -> when (mode.preset) {
+                    CleanupPreset.CODES -> "Codes & expiring \u00B7 $total"
+                    CleanupPreset.DUPLICATES -> "Near-duplicates \u00B7 $total"
+                }
                 else -> ""
             }
             val progressLabel = "${(index + 1).coerceAtMost(total)} of $total"
@@ -596,7 +616,19 @@ private fun ReviewHeaderBlock(
                             .fillMaxWidth(animatedFraction)
                             .fillMaxHeight()
                             .clip(CircleShape)
-                            .background(if (mode is ReviewMode.Search) SiftTheme.extended.removeAccent else MaterialTheme.colorScheme.primary)
+                            .background(if (mode is ReviewMode.Search || mode is ReviewMode.Cleanup) SiftTheme.extended.removeAccent else MaterialTheme.colorScheme.primary)
+                    )
+                }
+
+                // Age filter chips row in header during active search or CODES cleanup swiping
+                if ((mode is ReviewMode.Search || (mode is ReviewMode.Cleanup && mode.preset == CleanupPreset.CODES)) && phase == ReviewPhase.Swiping) {
+                    AgeFilterRow(
+                        selectedFilter = ageFilter,
+                        onSelectFilter = onAgeFilterChange,
+                        compact = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp)
                     )
                 }
             }
@@ -616,7 +648,7 @@ private fun ReviewBottomControlRow(
     onRightClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val isSearch = mode is ReviewMode.Search
+    val isSearch = mode is ReviewMode.Search || mode is ReviewMode.Cleanup
     val leftAriaLabel = if (isSearch) "Mark for deletion" else "Remove from collection"
 
     Row(
@@ -979,6 +1011,7 @@ private fun SearchSummaryCard(
 @Composable
 private fun SearchFreedCard(
     bytesFreed: Long,
+    isCleanup: Boolean = false,
     onNewSearch: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1041,7 +1074,7 @@ private fun SearchFreedCard(
                     .height(52.dp)
             ) {
                 Text(
-                    text = "New search",
+                    text = if (isCleanup) "Back to review" else "New search",
                     style = MaterialTheme.typography.titleMedium
                 )
             }

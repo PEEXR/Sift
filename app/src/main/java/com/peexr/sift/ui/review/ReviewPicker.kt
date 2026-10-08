@@ -21,13 +21,18 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.FolderSpecial
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -35,12 +40,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.peexr.sift.data.cleanup.AgeFilter
 import com.peexr.sift.data.model.CollectionSummary
 import com.peexr.sift.ui.navigation.FloatingNavClearance
 import com.peexr.sift.ui.theme.SiftTheme
@@ -54,11 +64,139 @@ val SUGGESTION_PROMPTS = listOf(
 )
 
 /**
+ * Reusable row of age filter chips.
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalMaterial3Api::class)
+@Composable
+fun AgeFilterRow(
+    selectedFilter: AgeFilter,
+    onSelectFilter: (AgeFilter) -> Unit,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false
+) {
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        items(AgeFilter.entries) { filter ->
+            val isSelected = filter == selectedFilter
+            FilterChip(
+                selected = isSelected,
+                onClick = { onSelectFilter(filter) },
+                label = {
+                    Text(
+                        text = filter.label,
+                        style = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium
+                    )
+                },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                ),
+                shape = CircleShape,
+                modifier = Modifier
+                    .semantics {
+                        role = Role.RadioButton
+                        contentDescription = filter.label
+                    }
+                    .height(if (compact) 36.dp else 40.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun QuickCleanupCard(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    isLoading: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.large)
+            .clickable(
+                enabled = !isLoading,
+                role = Role.Button,
+                onClickLabel = title,
+                onClick = onClick
+            )
+            .semantics {
+                contentDescription = "$title, $subtitle"
+            }
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = SiftTheme.extended.displayInk,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = SiftTheme.extended.displayInk,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            if (isLoading) {
+                LoadingIndicator(
+                    modifier = Modifier.size(24.dp),
+                    color = MaterialTheme.colorScheme.primary
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
  * Picker screen shown when neither a collection nor a search query is active.
  */
 @Composable
 fun ReviewPicker(
     collections: List<CollectionSummary>,
+    ageFilter: AgeFilter = AgeFilter.ANY,
+    onAgeFilterChange: (AgeFilter) -> Unit = {},
+    loadingCleanupPreset: CleanupPreset? = null,
+    onStartCleanup: (CleanupPreset) -> Unit = {},
     onSelectCollection: (String) -> Unit,
     onSelectSuggestion: (String) -> Unit,
     onNavigateToCollections: () -> Unit,
@@ -76,6 +214,55 @@ fun ReviewPicker(
         ),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // Age filter chips row
+        item(key = "age_filter") {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Age filter",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 4.dp)
+                )
+                AgeFilterRow(
+                    selectedFilter = ageFilter,
+                    onSelectFilter = onAgeFilterChange,
+                    compact = false,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+
+        // Quick cleanups section
+        item(key = "quick_cleanups") {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Quick cleanups",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 4.dp)
+                )
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    QuickCleanupCard(
+                        title = "Codes & expiring",
+                        subtitle = "one-time codes and \u2018expires in\u2026\u2019 screenshots",
+                        icon = Icons.Rounded.Key,
+                        isLoading = loadingCleanupPreset == CleanupPreset.CODES,
+                        onClick = { onStartCleanup(CleanupPreset.CODES) }
+                    )
+                    QuickCleanupCard(
+                        title = "Near-duplicates",
+                        subtitle = "shots you took twice in a row",
+                        icon = Icons.Rounded.ContentCopy,
+                        isLoading = loadingCleanupPreset == CleanupPreset.DUPLICATES,
+                        onClick = { onStartCleanup(CleanupPreset.DUPLICATES) }
+                    )
+                }
+            }
+        }
+
         // Suggestions row
         item(key = "suggestions") {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -26,9 +26,15 @@ import com.peexr.sift.data.model.CollectionMemberItem
 import com.peexr.sift.data.model.CollectionSummary
 import com.peexr.sift.data.model.JevQuestion
 import com.peexr.sift.data.model.JevRequest
+import com.peexr.sift.data.cleanup.CodeKind
+import com.peexr.sift.data.cleanup.EmbeddedRef
+import com.peexr.sift.data.cleanup.burstDeletionCandidates
+import com.peexr.sift.data.cleanup.findBursts
+import com.peexr.sift.data.cleanup.looksLikeCode
 import com.peexr.sift.data.model.ScreenshotDetail
 import com.peexr.sift.data.model.ScreenshotItem
 import com.peexr.sift.data.perception.PerceptionEngine
+import com.peexr.sift.data.search.EMBEDDING_DIM
 import com.peexr.sift.data.search.reciprocalRankFusion
 import com.peexr.sift.data.search.sanitizeFtsQuery
 import com.peexr.sift.data.search.toFloatArray
@@ -630,6 +636,56 @@ class ScreenshotRepository(
         )
     }
 
+    suspend fun findCodeScreenshots(): List<CodeMatch> = withContext(Dispatchers.IO) {
+        val ocrRows = dao.getOcrTexts()
+        if (ocrRows.isEmpty()) return@withContext emptyList()
+
+        val matchesWithKind = withContext(Dispatchers.Default) {
+            ocrRows.mapNotNull { row ->
+                val kind = looksLikeCode(row.ocrText)
+                if (kind != null) row.id to kind else null
+            }
+        }
+
+        if (matchesWithKind.isEmpty()) return@withContext emptyList()
+
+        val ids = matchesWithKind.map { it.first }
+        val entities = ids.chunked(500).flatMap { chunk ->
+            dao.getScreenshotsByIds(chunk)
+        }
+        val entityMap = entities.associateBy { it.id }
+        matchesWithKind.mapNotNull { (id, kind) ->
+            entityMap[id]?.let { CodeMatch(entity = it, kind = kind) }
+        }
+    }
+
+    suspend fun findDuplicateScreenshots(): List<ScreenshotEntity> = withContext(Dispatchers.IO) {
+        val embeddedRows = dao.getEmbeddedRefs()
+        if (embeddedRows.isEmpty()) return@withContext emptyList()
+
+        val candidateIds = withContext(Dispatchers.Default) {
+            val refs = embeddedRows.mapNotNull { row ->
+                try {
+                    val floats = row.embedding.toFloatArray()
+                    if (floats.size == EMBEDDING_DIM) {
+                        EmbeddedRef(id = row.id, dateAdded = row.dateAdded, embedding = floats)
+                    } else null
+                } catch (_: Exception) {
+                    null
+                }
+            }
+            val bursts = findBursts(refs)
+            burstDeletionCandidates(bursts)
+        }
+
+        if (candidateIds.isEmpty()) return@withContext emptyList()
+
+        val entities = candidateIds.chunked(500).flatMap { chunk ->
+            dao.getScreenshotsByIds(chunk)
+        }
+        entities.sortedBy { it.dateAdded }
+    }
+
     suspend fun mapToDomainModel(entities: List<ScreenshotEntity>): List<ScreenshotItem> = withContext(Dispatchers.IO) {
         if (entities.isEmpty()) return@withContext emptyList()
         val ids = entities.map { it.id }
@@ -642,6 +698,11 @@ class ScreenshotRepository(
         }
     }
 }
+
+data class CodeMatch(
+    val entity: ScreenshotEntity,
+    val kind: CodeKind
+)
 
 /**
  * Computes the list of database screenshot IDs that are no longer present in MediaStore.

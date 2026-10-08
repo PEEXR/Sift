@@ -39,6 +39,12 @@ interface ScreenshotDao {
     @Query("SELECT id, embedding FROM screenshots WHERE embedding IS NOT NULL")
     suspend fun getAllEmbeddings(): List<EmbeddingRow>
 
+    @Query("SELECT id, dateAdded, embedding FROM screenshots WHERE embedding IS NOT NULL ORDER BY dateAdded ASC")
+    suspend fun getEmbeddedRefs(): List<EmbeddedRow>
+
+    @Query("SELECT id, ocrText FROM screenshots WHERE ocrText != ''")
+    suspend fun getOcrTexts(): List<OcrRow>
+
     @Query("SELECT id, uri FROM screenshots WHERE embedding IS NULL")
     suspend fun getScreenshotsNeedingEmbedding(): List<ScreenshotUriRow>
 

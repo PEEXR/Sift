@@ -296,4 +296,64 @@ class ReviewSessionTest {
         assertEquals(1, afterUndo.deleted)
         assertFalse(afterUndo.canUndo)
     }
+
+    // --- Cleanup mode tests ---
+
+    @Test
+    fun cleanupMode_emptyCards_entersEmptyPhase() {
+        val session = ReviewSession().apply(ReviewAction.StartCleanup(CleanupPreset.CODES, emptyList()))
+        assertEquals(ReviewMode.Cleanup(CleanupPreset.CODES), session.mode)
+        assertEquals(ReviewPhase.Empty, session.phase)
+    }
+
+    @Test
+    fun cleanupMode_codesPreset_swipingMarkAndMarkRemainingFlow() {
+        val cards = listOf(
+            ReviewCard(createScreenshot(1L), "One-time code", isStrong = false),
+            ReviewCard(createScreenshot(2L), "Expiring", isStrong = true),
+            ReviewCard(createScreenshot(3L), "One-time code", isStrong = true)
+        )
+
+        var session = ReviewSession().apply(ReviewAction.StartCleanup(CleanupPreset.CODES, cards))
+        assertEquals(ReviewMode.Cleanup(CleanupPreset.CODES), session.mode)
+        assertEquals(ReviewPhase.Swiping, session.phase)
+        assertFalse(session.showMarkRemaining)
+
+        // Keep card 1 (unsure)
+        session = session.apply(ReviewAction.Keep)
+        assertEquals(1, session.index)
+        assertEquals(1, session.kept)
+        // Now remaining cards [2L, 3L] are all strong!
+        assertTrue(session.showMarkRemaining)
+
+        // Mark remaining
+        session = session.apply(ReviewAction.MarkRemaining)
+        assertEquals(3, session.index)
+        assertEquals(setOf(2L, 3L), session.marked)
+        assertEquals(ReviewPhase.Summary, session.phase)
+    }
+
+    @Test
+    fun cleanupMode_duplicatesPreset_allStrongAndBackToPicker() {
+        val cards = listOf(
+            ReviewCard(createScreenshot(10L), "Near-duplicate", isStrong = true),
+            ReviewCard(createScreenshot(20L), "Near-duplicate", isStrong = true)
+        )
+
+        var session = ReviewSession().apply(ReviewAction.StartCleanup(CleanupPreset.DUPLICATES, cards))
+        assertEquals(ReviewMode.Cleanup(CleanupPreset.DUPLICATES), session.mode)
+        // Since all cards are strong, mark remaining is immediately available
+        assertTrue(session.showMarkRemaining)
+
+        // Swipe left marks card 10L
+        session = session.apply(ReviewAction.RemoveOrMark)
+        assertEquals(1, session.index)
+        assertEquals(setOf(10L), session.marked)
+
+        // Back action resets to Picker
+        session = session.apply(ReviewAction.Back)
+        assertEquals(ReviewMode.Picker, session.mode)
+        assertTrue(session.stack.isEmpty())
+        assertEquals(0, session.index)
+    }
 }
