@@ -137,7 +137,7 @@ class EmbeddingWorker(
         var embeddedCount = 0
 
         val settings = app.settingsManager
-        val quality = settings.indexingQuality
+        var quality = settings.indexingQuality
         var measuredSec = settings.measuredSecPerImageAt280
         val itemsNeedingEmbedding = itemsToProcess.count { it.needsEmbedding }
         var chosenBudget = resolveBudget(quality, measuredSec, itemsNeedingEmbedding)
@@ -202,6 +202,14 @@ class EmbeddingWorker(
 
                 // 2. Multimodal embedding if needed and model is ready
                 if (item.needsEmbedding && canEmbed && embeddingEngine != null) {
+                    // The user may change the quality in Settings mid-run: apply it from the next screenshot.
+                    val currentQuality = settings.indexingQuality
+                    if (currentQuality != quality) {
+                        quality = currentQuality
+                        isCalibrating = false
+                        chosenBudget = resolveBudget(quality, measuredSec, (itemsNeedingEmbedding - embeddedCount).coerceAtLeast(0))
+                        Log.i(TAG, "Indexing quality changed to $quality mid-run -> budget=$chosenBudget")
+                    }
                     val budgetToUse = if (isCalibrating) 140 else chosenBudget
                     try {
                         val t0 = SystemClock.elapsedRealtime()
