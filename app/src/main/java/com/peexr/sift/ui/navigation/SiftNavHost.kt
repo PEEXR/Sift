@@ -12,6 +12,12 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.layout.windowInsetsBottomHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -180,6 +186,25 @@ fun SiftMainApp(
                 SettingsRoute(
                     viewModel = settingsViewModel,
                     onBack = { showSettingsScreen = false }
+                )
+            }
+
+            // Android 15+ ignores a requested nav-bar colour in 3-button mode, so content would show through the
+            // buttons. Fade the page into the background behind the system bar (invisible with gesture navigation).
+            if (viewerScreenshotId == null) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .windowInsetsBottomHeight(WindowInsets.navigationBars)
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    MaterialTheme.colorScheme.background.copy(alpha = 0.94f)
+                                )
+                            )
+                        )
                 )
             }
 

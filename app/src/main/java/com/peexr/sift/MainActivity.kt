@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -54,7 +55,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        // 3-button navigation draws over the content, so give it a scrim; gesture navigation stays transparent.
+        enableEdgeToEdge(
+            navigationBarStyle = SystemBarStyle.auto(
+                lightScrim = android.graphics.Color.argb(0xE6, 0xFB, 0xF7, 0xFF),
+                darkScrim = android.graphics.Color.argb(0xE6, 0x14, 0x0B, 0x24)
+            )
+        )
         requestHighestRefreshRate()
 
         val app = application as SiftApplication

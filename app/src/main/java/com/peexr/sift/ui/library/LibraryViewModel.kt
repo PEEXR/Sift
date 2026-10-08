@@ -394,17 +394,23 @@ class LibraryViewModel(
             val workRunning = isWorkRunning(workInfos.map { it.state })
             val now = System.currentTimeMillis()
 
-            if (shouldAutoIndex(
-                    enabled = enabled,
-                    modelInstalled = modelInstalled,
-                    pendingCount = pendingCount,
-                    workRunning = workRunning,
-                    lastAutoStartMillis = lastAutoStartMillis,
-                    nowMillis = now
-                )
-            ) {
+            val start = shouldAutoIndex(
+                enabled = enabled,
+                modelInstalled = modelInstalled,
+                pendingCount = pendingCount,
+                workRunning = workRunning,
+                lastAutoStartMillis = lastAutoStartMillis,
+                nowMillis = now
+            )
+            Log.i(
+                "LibraryViewModel",
+                "autoIndex enabled=$enabled model=$modelInstalled pending=$pendingCount running=$workRunning -> start=$start"
+            )
+            if (start) {
                 lastAutoStartMillis = now
-                EmbeddingScheduler.enqueueIndexingNow(app, replace = false)
+                // Nothing is RUNNING here, so replacing is safe and also clears a stale queued request
+                // (KEEP would silently keep it and indexing would never begin).
+                EmbeddingScheduler.enqueueIndexingNow(app, replace = true)
             }
         } catch (e: CancellationException) {
             throw e
