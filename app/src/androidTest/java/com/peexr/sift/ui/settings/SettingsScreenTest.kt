@@ -1,7 +1,9 @@
 package com.peexr.sift.ui.settings
 
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -111,8 +113,8 @@ class SettingsScreenTest {
         composeTestRule.onNodeWithText("Loose").performScrollTo().performClick()
         assertEquals(AutoFillSensitivity.LOOSE, selectedSensitivity)
 
-        // Tap Balanced
-        composeTestRule.onNodeWithText("Balanced").performScrollTo().performClick()
+        // Tap Balanced (second "Balanced" node on screen is under Auto-fill sensitivity; first is Indexing quality)
+        composeTestRule.onAllNodesWithText("Balanced")[1].performScrollTo().performClick()
         assertEquals(AutoFillSensitivity.BALANCED, selectedSensitivity)
     }
 
@@ -180,8 +182,8 @@ class SettingsScreenTest {
         composeTestRule.onNodeWithText("Open-source licenses").performScrollTo().performClick()
         composeTestRule.waitForIdle()
 
-        // Dialog header
-        composeTestRule.onNodeWithText("Open-source licenses").assertIsDisplayed()
+        // Dialog header: both the button and dialog title match "Open-source licenses"
+        composeTestRule.onAllNodesWithText("Open-source licenses").assertCountEquals(2)
 
         // Verify ONNX Runtime and Bricolage Grotesque are listed
         composeTestRule.onNodeWithText("ONNX Runtime (MIT)").assertIsDisplayed()
@@ -216,8 +218,8 @@ class SettingsScreenTest {
         composeTestRule.onNodeWithText("Fast").performScrollTo().performClick()
         assertEquals(IndexingQuality.FAST, selectedQuality)
 
-        // Tap Balanced
-        composeTestRule.onNodeWithText("Balanced").performScrollTo().performClick()
+        // Tap Balanced (first "Balanced" node on screen is under Indexing quality; second is Auto-fill sensitivity)
+        composeTestRule.onAllNodesWithText("Balanced")[0].performScrollTo().performClick()
         assertEquals(IndexingQuality.BALANCED, selectedQuality)
 
         // Tap Best

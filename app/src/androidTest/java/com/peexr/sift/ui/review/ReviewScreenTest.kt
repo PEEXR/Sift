@@ -1,5 +1,8 @@
 package com.peexr.sift.ui.review
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -70,16 +73,19 @@ class ReviewScreenTest {
         // "Delete file" button is present in collection mode
         composeTestRule.onNodeWithText("Delete file").assertIsDisplayed()
         composeTestRule.onNodeWithText("Delete file").performClick()
+        composeTestRule.waitUntil(timeoutMillis = 5_000) { deleteFileCalled }
         assertTrue(deleteFileCalled)
 
-        // Keep button via content description
+        // Keep button via content description (button triggers fly-off animation before callback)
         composeTestRule.onNodeWithContentDescription("Keep").assertIsDisplayed()
         composeTestRule.onNodeWithContentDescription("Keep").performClick()
+        composeTestRule.waitUntil(timeoutMillis = 5_000) { keepCalled }
         assertTrue(keepCalled)
 
         // Remove button via content description ("Remove from collection")
         composeTestRule.onNodeWithContentDescription("Remove from collection").assertIsDisplayed()
         composeTestRule.onNodeWithContentDescription("Remove from collection").performClick()
+        composeTestRule.waitUntil(timeoutMillis = 5_000) { removeCalled }
         assertTrue(removeCalled)
     }
 
@@ -96,12 +102,13 @@ class ReviewScreenTest {
             showMarkRemaining = true,
             phase = ReviewPhase.Swiping
         )
+        var uiState by mutableStateOf(stateWithMarkRemaining)
         var markRemainingCalled = false
 
         composeTestRule.setContent {
             SiftTheme {
                 ReviewScreen(
-                    uiState = stateWithMarkRemaining,
+                    uiState = uiState,
                     onOpenCollection = {},
                     onSubmitSearch = {},
                     onClearSearch = {},
@@ -135,28 +142,9 @@ class ReviewScreenTest {
         assertTrue(markRemainingCalled)
 
         // Now verify that when showMarkRemaining is false, the pill is absent
-        val stateWithoutMarkRemaining = stateWithMarkRemaining.copy(showMarkRemaining = false)
-        composeTestRule.setContent {
-            SiftTheme {
-                ReviewScreen(
-                    uiState = stateWithoutMarkRemaining,
-                    onOpenCollection = {},
-                    onSubmitSearch = {},
-                    onClearSearch = {},
-                    onKeep = {},
-                    onRemoveOrMark = {},
-                    onMarkRemaining = {},
-                    onUndo = {},
-                    onDeleteCurrentFile = {},
-                    onRequestDeleteMarked = {},
-                    onClearMarks = {},
-                    onRestart = {},
-                    onBack = {},
-                    onOpenScreenshot = {},
-                    onNavigateToCollections = {}
-                )
-            }
-        }
+        uiState = uiState.copy(showMarkRemaining = false)
+        composeTestRule.waitForIdle()
+
         composeTestRule.onNode(hasText("Mark remaining", substring = true)).assertDoesNotExist()
     }
 

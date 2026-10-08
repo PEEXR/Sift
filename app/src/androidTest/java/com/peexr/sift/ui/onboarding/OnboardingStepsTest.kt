@@ -1,5 +1,8 @@
 package com.peexr.sift.ui.onboarding
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -32,11 +35,12 @@ class OnboardingStepsTest {
 
     @Test
     fun permissionsStep_rendersHeadline_andContinueDisabledUntilPermissionGranted() {
-        // When hasPhotosPermission = false, Continue is disabled
+        var hasPhotosPermission by mutableStateOf(false)
+
         composeTestRule.setContent {
             SiftTheme {
                 PermissionsStepContent(
-                    hasPhotosPermission = false,
+                    hasPhotosPermission = hasPhotosPermission,
                     isPhotosPermanentlyDenied = false,
                     hasNotificationPermission = false,
                     onRequestPhotos = {},
@@ -47,71 +51,49 @@ class OnboardingStepsTest {
             }
         }
 
+        // When hasPhotosPermission = false, Continue is disabled
         composeTestRule.onNodeWithText("Two quick permissions").assertIsDisplayed()
         composeTestRule.onNodeWithText("Continue").assertIsNotEnabled()
 
         // When hasPhotosPermission = true, Continue is enabled
-        composeTestRule.setContent {
-            SiftTheme {
-                PermissionsStepContent(
-                    hasPhotosPermission = true,
-                    isPhotosPermanentlyDenied = false,
-                    hasNotificationPermission = false,
-                    onRequestPhotos = {},
-                    onOpenSettings = {},
-                    onRequestNotifications = {},
-                    onContinue = {}
-                )
-            }
-        }
+        hasPhotosPermission = true
+        composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithText("Continue").assertIsEnabled()
     }
 
     @Test
     fun modelStep_rendersHeadline_andShowsDownloadProgressReadyStates() {
-        // 1. Download prompt state
+        var modelState by mutableStateOf<ModelState>(ModelState.NotInstalled)
+        var isInstalled by mutableStateOf(false)
+
         composeTestRule.setContent {
             SiftTheme {
                 ModelStepContent(
-                    modelState = ModelState.NotInstalled,
-                    isInstalled = false,
+                    modelState = modelState,
+                    isInstalled = isInstalled,
                     onDownloadModel = {},
                     onNext = {}
                 )
             }
         }
 
+        // 1. Download prompt state
         composeTestRule.onNodeWithText("Smart search model").assertIsDisplayed()
         composeTestRule.onNodeWithText("316 MB on-device AI").assertIsDisplayed()
         composeTestRule.onNodeWithText("Download 316 MB").assertIsDisplayed()
 
         // 2. Progress / Downloading state
-        composeTestRule.setContent {
-            SiftTheme {
-                ModelStepContent(
-                    modelState = ModelState.Downloading(bytesDone = 50L, bytesTotal = 100L, currentFile = "model"),
-                    isInstalled = false,
-                    onDownloadModel = {},
-                    onNext = {}
-                )
-            }
-        }
+        modelState = ModelState.Downloading(bytesDone = 50L, bytesTotal = 100L, currentFile = "model")
+        composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithText("Downloading… 50%").assertIsDisplayed()
         composeTestRule.onNodeWithText("Skip for now").assertIsDisplayed()
 
         // 3. Ready state
-        composeTestRule.setContent {
-            SiftTheme {
-                ModelStepContent(
-                    modelState = ModelState.Ready,
-                    isInstalled = true,
-                    onDownloadModel = {},
-                    onNext = {}
-                )
-            }
-        }
+        modelState = ModelState.Ready
+        isInstalled = true
+        composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithText("Model ready").assertIsDisplayed()
         composeTestRule.onNodeWithText("Continue").assertIsDisplayed()

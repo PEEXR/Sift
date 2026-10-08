@@ -1,5 +1,8 @@
 package com.peexr.sift.ui.collections
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -100,12 +103,13 @@ class CollectionDetailScreenTest {
             autoCount = 4,
             keptCount = 6
         )
+        var state by mutableStateOf(stateWithReviews)
         var reviewInvoked = false
 
         composeTestRule.setContent {
             SiftTheme {
                 CollectionDetailScreen(
-                    uiState = stateWithReviews,
+                    uiState = state,
                     onBack = {},
                     onReview = { reviewInvoked = true },
                     onOpenScreenshot = {},
@@ -123,26 +127,13 @@ class CollectionDetailScreenTest {
 
         // Now test when reviewCount == 0
         val collectionNoReviews = fakeCollectionSummary(id = "c2", name = "Receipts", reviewCount = 0)
-        val stateNoReviews = CollectionDetailUiState(
+        state = CollectionDetailUiState(
             collection = collectionNoReviews,
             allCount = 10,
             autoCount = 0,
             keptCount = 10
         )
-
-        composeTestRule.setContent {
-            SiftTheme {
-                CollectionDetailScreen(
-                    uiState = stateNoReviews,
-                    onBack = {},
-                    onReview = {},
-                    onOpenScreenshot = {},
-                    onFilterSelected = {},
-                    onUpdateDescription = {},
-                    onDelete = {}
-                )
-            }
-        }
+        composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithText("Review 0 unsure").assertDoesNotExist()
     }
