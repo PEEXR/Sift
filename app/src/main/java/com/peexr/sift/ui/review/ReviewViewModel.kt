@@ -13,8 +13,10 @@ import com.peexr.sift.data.model.CollectionSummary
 import com.peexr.sift.data.model.ScreenshotItem
 import com.peexr.sift.data.repository.ScreenshotRepository
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -48,7 +50,8 @@ data class ReviewUiState(
 )
 
 class ReviewViewModel(
-    private val repository: ScreenshotRepository
+    private val repository: ScreenshotRepository,
+    private val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 ) : ViewModel() {
 
     private val _session = MutableStateFlow(ReviewSession())
@@ -60,6 +63,27 @@ class ReviewViewModel(
     private var searchJob: Job? = null
     private var cleanupJob: Job? = null
     private var toastJob: Job? = null
+    private var collectionRefreshedForCurrentSession = false
+
+    private fun triggerCollectionRefreshIfNeeded() {
+        val session = _session.value
+        val mode = session.mode
+        if (mode is ReviewMode.Collection && !collectionRefreshedForCurrentSession) {
+            if (shouldRefreshAfterSession(session.kept, session.removed)) {
+                collectionRefreshedForCurrentSession = true
+                val collectionId = mode.id
+                appScope.launch {
+                    try {
+                        repository.refreshAutoCollections(onlyCollectionId = collectionId)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (t: Throwable) {
+                        Log.e("ReviewViewModel", "Failed to refresh auto collection $collectionId after session", t)
+                    }
+                }
+            }
+        }
+    }
 
     init {
         viewModelScope.launch {
@@ -119,6 +143,8 @@ class ReviewViewModel(
     }
 
     fun openCollection(collectionId: String) {
+        triggerCollectionRefreshIfNeeded()
+        collectionRefreshedForCurrentSession = false
         searchJob?.cancel()
         cleanupJob?.cancel()
         viewModelScope.launch {
@@ -158,6 +184,7 @@ class ReviewViewModel(
         val trimmed = query.trim()
         if (trimmed.isBlank()) return
 
+        triggerCollectionRefreshIfNeeded()
         searchJob?.cancel()
         cleanupJob?.cancel()
         dispatch(ReviewAction.SetQuery(trimmed))
@@ -200,6 +227,7 @@ class ReviewViewModel(
     }
 
     fun startCleanup(preset: CleanupPreset, showLoadingPhase: Boolean = false) {
+        triggerCollectionRefreshIfNeeded()
         searchJob?.cancel()
         cleanupJob?.cancel()
 
@@ -270,6 +298,9 @@ class ReviewViewModel(
         searchJob?.cancel()
         cleanupJob?.cancel()
         dispatch(ReviewAction.ClearSearch)
+        if (_session.value.mode is ReviewMode.Collection) {
+            collectionRefreshedForCurrentSession = false
+        }
     }
 
     fun keep() {
@@ -292,6 +323,9 @@ class ReviewViewModel(
             showToast("Kept")
         }
         dispatch(ReviewAction.Keep)
+        if (_session.value.phase is ReviewPhase.Done) {
+            triggerCollectionRefreshIfNeeded()
+        }
     }
 
     fun removeOrMark() {
@@ -314,6 +348,9 @@ class ReviewViewModel(
             showToast("Marked for deletion")
         }
         dispatch(ReviewAction.RemoveOrMark)
+        if (_session.value.phase is ReviewPhase.Done) {
+            triggerCollectionRefreshIfNeeded()
+        }
     }
 
     fun markRemaining() {
@@ -361,6 +398,9 @@ class ReviewViewModel(
                     withContext(Dispatchers.Main) {
                         dispatch(ReviewAction.FileDeleted(current.item.id, current.item.sizeBytes))
                         showToast("File deleted")
+                        if (_session.value.phase is ReviewPhase.Done) {
+                            triggerCollectionRefreshIfNeeded()
+                        }
                     }
                 } catch (e: CancellationException) {
                     throw e
@@ -404,6 +444,9 @@ class ReviewViewModel(
                     dispatch(ReviewAction.FileDeleted(id, card?.item?.sizeBytes ?: 0L))
                     pendingSingleDeleteId = null
                     showToast("File deleted")
+                    if (_session.value.phase is ReviewPhase.Done) {
+                        triggerCollectionRefreshIfNeeded()
+                    }
                 } else {
                     val totalBytes = session.stack
                         .filter { ids.contains(it.item.id) }
@@ -425,23 +468,42 @@ class ReviewViewModel(
     }
 
     fun restart() {
+        collectionRefreshedForCurrentSession = false
         dispatch(ReviewAction.Restart)
     }
 
     fun back() {
+        triggerCollectionRefreshIfNeeded()
         dispatch(ReviewAction.Back)
+        if (_session.value.mode is ReviewMode.Collection) {
+            collectionRefreshedForCurrentSession = false
+        }
     }
 
     fun clearStatusToast() {
         _statusToast.value = null
     }
 
+    override fun onCleared() {
+        super.onCleared()
+        triggerCollectionRefreshIfNeeded()
+    }
+
     class Factory(
-        private val repository: ScreenshotRepository
+        private val repository: ScreenshotRepository,
+        private val appScope: CoroutineScope? = null
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return ReviewViewModel(repository) as T
+            val scope = appScope ?: CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            return ReviewViewModel(repository, scope) as T
         }
     }
 }
+
+/**
+ * Pure decision function determining whether auto-collections should be refreshed
+ * after a review session. Refreshes if either kept or removed count is greater than zero.
+ */
+fun shouldRefreshAfterSession(keptCount: Int, removedCount: Int): Boolean =
+    keptCount > 0 || removedCount > 0

@@ -342,7 +342,7 @@ class ScreenshotRepository(
         }
 
         try {
-            val (targetCollections, rawEmbeddings) = withContext(Dispatchers.IO) {
+            val (targetCollections, rawEmbeddings, feedbackByCollection) = withContext(Dispatchers.IO) {
                 val collections = if (onlyCollectionId != null) {
                     val col = dao.getCollectionById(onlyCollectionId)
                     if (col != null && col.autoFill) listOf(col) else emptyList()
@@ -350,7 +350,12 @@ class ScreenshotRepository(
                     dao.getAutoFillCollections()
                 }
                 val embeddings = dao.getAllEmbeddings()
-                Pair(collections, embeddings)
+                val feedback = collections.associate { col ->
+                    val kept = dao.getFeedbackEmbeddings(col.id, MembershipSource.MANUAL)
+                    val excluded = dao.getFeedbackEmbeddings(col.id, MembershipSource.EXCLUDED)
+                    col.id to Pair(kept, excluded)
+                }
+                Triple(collections, embeddings, feedback)
             }
 
             if (targetCollections.isEmpty()) {
@@ -376,9 +381,33 @@ class ScreenshotRepository(
                     }
                 }
 
-                collectionVectors.map { (col, vec) ->
+                collectionVectors.map { (col, textVec) ->
+                    val (keptRows, excludedRows) = feedbackByCollection[col.id] ?: Pair(emptyList(), emptyList())
+                    val keptVectors = keptRows.mapNotNull { row ->
+                        try {
+                            val vec = row.embedding.toFloatArray()
+                            if (vec.size == 128) vec else null
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                    val excludedVectors = excludedRows.mapNotNull { row ->
+                        try {
+                            val vec = row.embedding.toFloatArray()
+                            if (vec.size == 128) vec else null
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+
+                    val refinedVector = CollectionMatcher.refineQuery(
+                        base = textVec,
+                        positives = keptVectors,
+                        negatives = excludedVectors
+                    )
+
                     val matches = CollectionMatcher.match(
-                        collection = vec,
+                        collection = refinedVector,
                         screenshots = candidateScreenshots,
                         background = backgroundVectors,
                         threshold = zThresholdProvider()

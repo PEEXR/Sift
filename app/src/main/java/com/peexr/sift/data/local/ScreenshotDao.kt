@@ -144,6 +144,9 @@ interface ScreenshotDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertMembership(row: ScreenshotCollectionCrossRef)
 
+    @Query("SELECT s.id AS id, s.embedding AS embedding FROM screenshots s INNER JOIN screenshot_collections sc ON sc.screenshotId = s.id WHERE sc.collectionId = :collectionId AND sc.source = :source AND s.embedding IS NOT NULL")
+    suspend fun getFeedbackEmbeddings(collectionId: String, source: String): List<EmbeddingRow>
+
     @Query("""
         SELECT sc.screenshotId AS screenshotId, c.name AS name
         FROM screenshot_collections sc

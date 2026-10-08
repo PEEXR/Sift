@@ -45,7 +45,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private val reviewViewModel: ReviewViewModel by viewModels {
-        ReviewViewModel.Factory((application as SiftApplication).repository)
+        val app = application as SiftApplication
+        ReviewViewModel.Factory(
+            repository = app.repository,
+            appScope = app.appScope
+        )
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

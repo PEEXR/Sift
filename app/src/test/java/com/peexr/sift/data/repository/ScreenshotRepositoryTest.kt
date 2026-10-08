@@ -82,6 +82,10 @@ class ScreenshotRepositoryTest {
         `when`(mockDao.getCollectionPreviewsFlow()).thenReturn(kotlinx.coroutines.flow.emptyFlow())
         // ScreenshotRepository reads context.contentResolver in its initializer
         `when`(mockContext.contentResolver).thenReturn(mock(android.content.ContentResolver::class.java))
+        runBlocking {
+            `when`(mockDao.getFeedbackEmbeddings(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(emptyList())
+        }
     }
 
     private fun createRepository(): ScreenshotRepository {
@@ -481,6 +485,47 @@ class ScreenshotRepositoryTest {
         repo.refreshAutoCollections()
 
         // Inspect the recorded call directly: Mockito's eq()/anyList() return null and break on Kotlin non-null params
+        val replaceCalls = org.mockito.Mockito.mockingDetails(mockDao).invocations
+            .filter { it.method.name == "replaceAutoMembers" }
+        assertEquals(1, replaceCalls.size)
+        assertEquals("col_memes", replaceCalls.single().arguments[0])
+    }
+
+    @Test
+    fun refreshAutoCollections_withFeedbackEmbeddings_loadsFeedbackAndRefines() = runBlocking {
+        val repo = createRepository()
+
+        `when`(mockModelStore.state).thenReturn(kotlinx.coroutines.flow.MutableStateFlow(ModelState.Ready))
+        `when`(mockModelStore.isInstalled()).thenReturn(true)
+
+        val col1 = CollectionEntity(
+            id = "col_memes",
+            name = "Memes",
+            description = "funny meme images",
+            autoFill = true
+        )
+        `when`(mockDao.getAutoFillCollections()).thenReturn(listOf(col1))
+
+        val dummyVec = FloatArray(128) { 0.1f }
+        dummyVec[0] = 1f
+        `when`(mockEmbeddingEngine.embedText(org.mockito.ArgumentMatchers.anyString())).thenReturn(dummyVec)
+
+        val keptVec = FloatArray(128) { 0.2f }
+        val excludedVec = FloatArray(128) { 0.05f }
+        `when`(mockDao.getFeedbackEmbeddings("col_memes", MembershipSource.MANUAL))
+            .thenReturn(listOf(createEmbeddingRow(100L, keptVec)))
+        `when`(mockDao.getFeedbackEmbeddings("col_memes", MembershipSource.EXCLUDED))
+            .thenReturn(listOf(createEmbeddingRow(200L, excludedVec)))
+
+        val imgVec = FloatArray(128) { 0.1f }
+        imgVec[0] = 1f
+        `when`(mockDao.getAllEmbeddings()).thenReturn(listOf(createEmbeddingRow(10L, imgVec)))
+
+        repo.refreshAutoCollections()
+
+        verify(mockDao).getFeedbackEmbeddings("col_memes", MembershipSource.MANUAL)
+        verify(mockDao).getFeedbackEmbeddings("col_memes", MembershipSource.EXCLUDED)
+
         val replaceCalls = org.mockito.Mockito.mockingDetails(mockDao).invocations
             .filter { it.method.name == "replaceAutoMembers" }
         assertEquals(1, replaceCalls.size)
