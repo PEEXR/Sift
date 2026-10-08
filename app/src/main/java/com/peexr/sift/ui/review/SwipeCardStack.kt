@@ -26,15 +26,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -49,6 +52,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -356,12 +360,16 @@ private fun CardContentLayout(
         }
     }
 
+    var aspect by remember(card.item.uri) { mutableStateOf<Float?>(null) }
+    val imageMode = cardImageMode(aspect)
+    val snippet = remember(card.item.ocrText) { ocrSnippet(card.item.ocrText) }
+
     Column(
         modifier = modifier
             .fillMaxSize()
             .padding(12.dp)
     ) {
-        // Screenshot image (Coil, ContentScale.Crop, 26 dp rounded corners, surfaceContainer placeholder)
+        // Screenshot image area: fixed frame, weight(1f), letterboxed backdrop + Fit/Tall foreground
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -369,23 +377,104 @@ private fun CardContentLayout(
                 .clip(RoundedCornerShape(26.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainer)
         ) {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
+            // 1. Backdrop: blurred and dimmed so letterbox space never looks like empty black bars
+            val backdropRequest = remember(card.item.uri) {
+                ImageRequest.Builder(context)
                     .data(card.item.uri)
                     .crossfade(true)
-                    .size(Size(720, 960))
-                    .build(),
-                contentDescription = "Screenshot from $formattedDate",
+                    .size(Size(160, 240))
+                    .build()
+            }
+            AsyncImage(
+                model = backdropRequest,
+                contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier
+                    .fillMaxSize()
+                    .blur(28.dp)
             )
+
+            // Dim overlay: scrim at ~35% alpha
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.35f))
+            )
+
+            // 2 & 3. Foreground: top card loads full-size image (1080x1440), peeking cards keep a cheap load (160x240)
+            val foregroundSize = if (interactive) Size(1080, 1440) else Size(160, 240)
+            val foregroundRequest = remember(card.item.uri, interactive) {
+                ImageRequest.Builder(context)
+                    .data(card.item.uri)
+                    .crossfade(true)
+                    .size(foregroundSize)
+                    .build()
+            }
+
+            when (imageMode) {
+                CardImageMode.FIT -> {
+                    AsyncImage(
+                        model = foregroundRequest,
+                        contentDescription = "Screenshot from $formattedDate",
+                        contentScale = ContentScale.Fit,
+                        alignment = Alignment.Center,
+                        onSuccess = { state ->
+                            aspect = state.painter.intrinsicSize.run {
+                                if (height > 0f) width / height else null
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(8.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                    )
+                }
+
+                CardImageMode.TALL_TOP -> {
+                    AsyncImage(
+                        model = foregroundRequest,
+                        contentDescription = "Screenshot from $formattedDate",
+                        contentScale = ContentScale.FillWidth,
+                        alignment = Alignment.TopCenter,
+                        onSuccess = { state ->
+                            aspect = state.painter.intrinsicSize.run {
+                                if (height > 0f) width / height else null
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(26.dp))
+                    )
+
+                    // 56 dp bottom fade to backdrop colour for very tall captures
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp)
+                            .align(Alignment.BottomCenter)
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(
+                                        Color.Transparent,
+                                        MaterialTheme.colorScheme.surfaceContainer
+                                    )
+                                )
+                            )
+                    )
+                }
+            }
         }
 
         // Bottom info row: Date on left, Match confidence pill on right
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 12.dp),
+                .padding(
+                    start = 8.dp,
+                    end = 8.dp,
+                    top = if (snippet.isNotBlank()) 10.dp else 12.dp,
+                    bottom = if (snippet.isNotBlank()) 4.dp else 12.dp
+                ),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -412,6 +501,21 @@ private fun CardContentLayout(
                     )
                 }
             }
+        }
+
+        // OCR snippet line under the date row (only shown when not blank)
+        if (snippet.isNotBlank()) {
+            Text(
+                text = snippet,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp)
+                    .padding(bottom = 8.dp)
+            )
         }
     }
 }
