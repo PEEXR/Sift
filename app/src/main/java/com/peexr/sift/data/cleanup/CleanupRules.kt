@@ -46,12 +46,16 @@ private val OTP_KEYWORDS = listOf(
 private val EXPIRING_PHRASES = listOf(
     "expires in",
     "expires on",
-    "valid for",
-    "valid until",
     "expiring",
     "will expire",
-    "expire in",
-    "use within"
+    "expire in"
+)
+
+// "valid for 10 minutes", "valid until 5 pm", "use within 2 hours": the phrase alone is too common
+// ("valid for in-game purchases"), so it only counts when a time follows.
+private val TIMED_EXPIRY_REGEX = Regex(
+    """((valid for|valid until|valid till|use within|expires? (in|at|by))\s+(\d+|an?|one|two|three|five|ten|fifteen|thirty)\s*(sec|second|min|minute|hour|hr|day|am|pm))|(valid (until|till)\s+(midnight|tomorrow|today))""",
+    RegexOption.IGNORE_CASE
 )
 
 private val STANDALONE_CODE_REGEX = Regex("""(?<!\d)\d{4,8}(?!\d)""")
@@ -71,7 +75,7 @@ fun looksLikeCode(ocrText: String): CodeKind? {
         return CodeKind.OTP
     }
 
-    val hasExpiringPhrase = EXPIRING_PHRASES.any { lower.contains(it) }
+    val hasExpiringPhrase = EXPIRING_PHRASES.any { lower.contains(it) } || TIMED_EXPIRY_REGEX.containsMatchIn(lower)
     if (hasExpiringPhrase) {
         return CodeKind.EXPIRING
     }

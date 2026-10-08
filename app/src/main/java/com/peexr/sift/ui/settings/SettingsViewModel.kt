@@ -384,6 +384,16 @@ class SettingsViewModel(
                             app.settingsManager.measuredSecPerImageAt280 = backupSettings.measuredSecPerImageAt280
                         }
 
+                        // The screen shows a copy of the settings: refresh it so it matches what was just restored.
+                        _uiState.update {
+                            it.copy(
+                                autoFillSensitivity = app.settingsManager.autoFillSensitivity,
+                                indexingQuality = app.settingsManager.indexingQuality,
+                                autoIndexNewScreenshots = app.settingsManager.autoIndexNewScreenshots,
+                                measuredSecPerImageAt280 = app.settingsManager.measuredSecPerImageAt280
+                            )
+                        }
+
                         val stats = repository.libraryStats()
                         val pending = stats.total - stats.indexed
                         if (pending > 0 && app.modelStore.isInstalled()) {
@@ -397,7 +407,7 @@ class SettingsViewModel(
                         } else {
                             ""
                         }
-                        val msg = "Restored $formattedMatched screenshots, $totalCollections collections.$unmatchedMsg"
+                        val msg = "Restored $formattedMatched screenshots, $totalCollections ${if (totalCollections == 1) "collection" else "collections"}.$unmatchedMsg"
                         _snackbarEvent.emit(msg)
                         refreshStats()
                     },

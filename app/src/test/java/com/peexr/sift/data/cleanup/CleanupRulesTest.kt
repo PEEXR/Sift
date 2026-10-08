@@ -55,6 +55,10 @@ class CleanupRulesTest {
         assertEquals(CodeKind.EXPIRING, looksLikeCode("Offer valid until midnight"))
         assertEquals(CodeKind.EXPIRING, looksLikeCode("This link is expiring soon"))
         assertEquals(CodeKind.EXPIRING, looksLikeCode("Ticket expires on Sunday"))
+        assertEquals(CodeKind.EXPIRING, looksLikeCode("Link valid for 15 minutes"))
+        assertEquals(CodeKind.EXPIRING, looksLikeCode("Please use within 2 hours"))
+        assertNull(looksLikeCode("Steam gift card. Valid for in-game purchases"))
+        assertNull(looksLikeCode("Valid for all products in stock"))
         assertEquals(CodeKind.EXPIRING, looksLikeCode("Discount code: use within 24 hours"))
     }
 

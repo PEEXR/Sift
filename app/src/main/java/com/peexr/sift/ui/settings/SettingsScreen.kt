@@ -1009,7 +1009,7 @@ fun SettingsScreen(
             },
             text = {
                 Text(
-                    text = "${confirmState.screenshotCount} screenshots, ${confirmState.collectionCount} collections, saved ${confirmState.dateText}",
+                    text = "${confirmState.screenshotCount} screenshots, ${confirmState.collectionCount} ${if (confirmState.collectionCount == 1) "collection" else "collections"}, saved ${confirmState.dateText}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
