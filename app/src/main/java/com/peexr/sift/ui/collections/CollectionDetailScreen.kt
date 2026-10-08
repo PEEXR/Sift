@@ -357,7 +357,7 @@ fun CollectionDetailScreen(
                                     Text(
                                         text = "Swipe to keep or remove",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = containerColor
+                                        color = MaterialTheme.colorScheme.inverseOnSurface.copy(alpha = 0.8f)
                                     )
                                 }
 
