@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -29,7 +30,10 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-val FloatingNavClearance: Dp = 100.dp
+/** Space screens must leave at the bottom: the pill's height plus the system navigation bar it floats above. */
+val FloatingNavClearance: Dp
+    @Composable
+    get() = 100.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
