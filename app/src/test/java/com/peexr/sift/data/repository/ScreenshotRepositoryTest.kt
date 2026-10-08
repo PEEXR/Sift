@@ -6,6 +6,13 @@ import com.peexr.sift.data.embedding.EmbeddingEngine
 import com.peexr.sift.data.embedding.ModelState
 import com.peexr.sift.data.embedding.ModelStore
 import com.peexr.sift.data.local.AppDatabase
+import com.peexr.sift.data.backup.BackupCollection
+import com.peexr.sift.data.backup.BackupFile
+import com.peexr.sift.data.backup.ScreenshotRef
+import com.peexr.sift.data.backup.decodeBackup
+import com.peexr.sift.data.backup.encodeBackup
+import com.peexr.sift.data.local.BackupMembershipRow
+import com.peexr.sift.data.local.CandidateScreenshotRow
 import com.peexr.sift.data.local.CollectionEntity
 import com.peexr.sift.data.local.CollectionMemberRow
 import com.peexr.sift.data.local.EmbeddingRow
@@ -490,6 +497,133 @@ class ScreenshotRepositoryTest {
         repo.updateCollectionDescription("col_test", "new description")
 
         verify(mockDao).updateCollectionDescription("col_test", "new description")
+    }
+
+    @Test
+    fun exportCollections_encodesExistingCollectionsAndMemberships() = runBlocking {
+        val repo = createRepository()
+
+        val col = CollectionEntity(
+            id = "col_test",
+            name = "Test Col",
+            description = "testing export",
+            colorHex = "#FFD8EC",
+            autoFill = true
+        )
+        `when`(mockDao.getAllCollections()).thenReturn(listOf(col))
+        `when`(mockDao.getManualBackupMemberships()).thenReturn(
+            listOf(
+                BackupMembershipRow(
+                    collectionId = "col_test",
+                    displayName = "shot1.png",
+                    dateAdded = 12345L,
+                    sizeBytes = 67890L
+                )
+            )
+        )
+        `when`(mockDao.getExcludedBackupMemberships()).thenReturn(
+            listOf(
+                BackupMembershipRow(
+                    collectionId = "col_test",
+                    displayName = "shot2.png",
+                    dateAdded = 23456L,
+                    sizeBytes = 78901L
+                )
+            )
+        )
+
+        val json = repo.exportCollections()
+        val decoded = decodeBackup(json).getOrThrow()
+
+        assertEquals(1, decoded.version)
+        assertEquals(1, decoded.collections.size)
+        val exportedCol = decoded.collections.first()
+        assertEquals("Test Col", exportedCol.name)
+        assertEquals("testing export", exportedCol.description)
+        assertEquals(1, exportedCol.kept.size)
+        assertEquals("shot1.png", exportedCol.kept.first().displayName)
+        assertEquals(1, exportedCol.excluded.size)
+        assertEquals("shot2.png", exportedCol.excluded.first().displayName)
+    }
+
+    @Test
+    fun importCollections_skipsExistingAndCreatesNewWithMemberships() = runBlocking {
+        val repo = createRepository()
+
+        val existingCol = CollectionEntity(
+            id = "col_existing",
+            name = "Existing",
+            description = "already exists",
+            colorHex = "#CFE5FF",
+            autoFill = false
+        )
+        `when`(mockDao.getAllCollections()).thenReturn(listOf(existingCol))
+        `when`(mockDao.getAllCandidatesForBackup()).thenReturn(
+            listOf(
+                CandidateScreenshotRow(
+                    id = 100L,
+                    displayName = "imported_shot.png",
+                    dateAdded = 1111L,
+                    sizeBytes = 2222L
+                )
+            )
+        )
+
+        val backup = BackupFile(
+            version = 1,
+            collections = listOf(
+                BackupCollection(
+                    name = "EXISTING",
+                    description = "should be skipped",
+                    colorHex = "#CFE5FF",
+                    autoFill = false
+                ),
+                BackupCollection(
+                    name = "New Import",
+                    description = "brand new",
+                    colorHex = "#E4F7B5",
+                    autoFill = false,
+                    kept = listOf(
+                        ScreenshotRef(
+                            displayName = "imported_shot.png",
+                            dateAdded = 1111L,
+                            sizeBytes = 2222L
+                        )
+                    )
+                )
+            )
+        )
+        val json = encodeBackup(backup)
+
+        val result = repo.importCollections(json)
+        assertTrue(result.isSuccess)
+        val summary = result.getOrThrow()
+
+        assertEquals(1, summary.collectionsCreated)
+        assertEquals(1, summary.collectionsSkipped)
+        assertEquals(1, summary.membershipsApplied)
+    }
+
+    @Test
+    fun reindexEverything_resetsScreenshotsAndClearsAutoMemberships() = runBlocking {
+        val repo = createRepository()
+
+        repo.reindexEverything()
+
+        verify(mockDao).resetAllScreenshotsForReindexing()
+        verify(mockDao).clearAllAutoMemberships()
+    }
+
+    @Test
+    fun libraryStats_queriesTotalAndIndexedFromDao() = runBlocking {
+        val repo = createRepository()
+
+        `when`(mockDao.countAll()).thenReturn(50)
+        `when`(mockDao.countIndexed()).thenReturn(35)
+
+        val stats = repo.libraryStats()
+        assertEquals(50, stats.total)
+        assertEquals(35, stats.indexed)
     }
 }
 

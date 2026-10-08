@@ -50,6 +50,13 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import com.peexr.sift.data.backup.BackupCollection
+import com.peexr.sift.data.backup.BackupFile
+import com.peexr.sift.data.backup.Candidate
+import com.peexr.sift.data.backup.ScreenshotRef
+import com.peexr.sift.data.backup.decodeBackup
+import com.peexr.sift.data.backup.encodeBackup
+import com.peexr.sift.data.backup.matchRefs
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -63,7 +70,8 @@ class ScreenshotRepository(
     private val perceptionEngine: PerceptionEngine,
     private val jevApiClient: JevApiClient,
     private val modelStoreProvider: () -> ModelStore? = { (context.applicationContext as? SiftApplication)?.modelStore },
-    private val embeddingEngineProvider: () -> EmbeddingEngine? = { (context.applicationContext as? SiftApplication)?.embeddingEngine }
+    private val embeddingEngineProvider: () -> EmbeddingEngine? = { (context.applicationContext as? SiftApplication)?.embeddingEngine },
+    private val zThresholdProvider: () -> Float = { CollectionMatcher.DEFAULT_Z_THRESHOLD }
 ) {
     private val dao = database.screenshotDao()
     private val contentResolver: ContentResolver = context.contentResolver
@@ -372,7 +380,8 @@ class ScreenshotRepository(
                     val matches = CollectionMatcher.match(
                         collection = vec,
                         screenshots = candidateScreenshots,
-                        background = backgroundVectors
+                        background = backgroundVectors,
+                        threshold = zThresholdProvider()
                     )
                     Pair(col.id, matches)
                 }
@@ -697,7 +706,141 @@ class ScreenshotRepository(
             entity.toDomainModel(namesByScreenshot[entity.id] ?: emptyList())
         }
     }
+
+    suspend fun exportCollections(): String = withContext(Dispatchers.IO) {
+        val collections = dao.getAllCollections()
+        val manualRows = dao.getManualBackupMemberships()
+        val excludedRows = dao.getExcludedBackupMemberships()
+
+        val keptByCollection = manualRows.groupBy({ it.collectionId }) {
+            ScreenshotRef(
+                displayName = it.displayName,
+                dateAdded = it.dateAdded,
+                sizeBytes = it.sizeBytes
+            )
+        }
+
+        val excludedByCollection = excludedRows.groupBy({ it.collectionId }) {
+            ScreenshotRef(
+                displayName = it.displayName,
+                dateAdded = it.dateAdded,
+                sizeBytes = it.sizeBytes
+            )
+        }
+
+        val backupCollections = collections.map { col ->
+            BackupCollection(
+                name = col.name,
+                description = col.description,
+                colorHex = col.colorHex,
+                autoFill = col.autoFill,
+                kept = keptByCollection[col.id] ?: emptyList(),
+                excluded = excludedByCollection[col.id] ?: emptyList()
+            )
+        }
+
+        encodeBackup(BackupFile(version = 1, collections = backupCollections))
+    }
+
+    suspend fun importCollections(json: String): Result<ImportSummary> = withContext(Dispatchers.IO) {
+        val backup = decodeBackup(json).getOrElse { return@withContext Result.failure(it) }
+        val existingCollections = dao.getAllCollections()
+        val existingNames = existingCollections.map { it.name.trim().lowercase() }.toMutableSet()
+
+        val candidateRows = dao.getAllCandidatesForBackup()
+        val candidates = candidateRows.map {
+            Candidate(
+                id = it.id,
+                displayName = it.displayName,
+                dateAdded = it.dateAdded,
+                sizeBytes = it.sizeBytes
+            )
+        }
+
+        var collectionsCreated = 0
+        var collectionsSkipped = 0
+        var membershipsApplied = 0
+        val autoFillIdsToRefresh = mutableListOf<String>()
+
+        for (col in backup.collections) {
+            val normalizedName = col.name.trim().lowercase()
+            if (normalizedName in existingNames) {
+                collectionsSkipped++
+                continue
+            }
+
+            val newId = col.name.lowercase().replace("\\s+".toRegex(), "_") + "_" + System.currentTimeMillis() + "_" + (collectionsCreated + 1)
+            dao.insertCollection(
+                CollectionEntity(
+                    id = newId,
+                    name = col.name,
+                    description = col.description,
+                    colorHex = col.colorHex,
+                    autoFill = col.autoFill
+                )
+            )
+            collectionsCreated++
+            existingNames.add(normalizedName)
+
+            val keptIds = matchRefs(col.kept, candidates)
+            for (id in keptIds) {
+                keepInCollection(id, newId)
+                membershipsApplied++
+            }
+
+            val excludedIds = matchRefs(col.excluded, candidates)
+            for (id in excludedIds) {
+                removeFromCollection(id, newId)
+                membershipsApplied++
+            }
+
+            if (col.autoFill) {
+                autoFillIdsToRefresh.add(newId)
+            }
+        }
+
+        for (id in autoFillIdsToRefresh) {
+            try {
+                refreshAutoCollections(onlyCollectionId = id)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                Log.w("ScreenshotRepository", "Failed to refresh auto collection $id during import", t)
+            }
+        }
+
+        Result.success(
+            ImportSummary(
+                collectionsCreated = collectionsCreated,
+                collectionsSkipped = collectionsSkipped,
+                membershipsApplied = membershipsApplied
+            )
+        )
+    }
+
+    suspend fun reindexEverything() = withContext(Dispatchers.IO) {
+        dao.resetAllScreenshotsForReindexing()
+        dao.clearAllAutoMemberships()
+    }
+
+    suspend fun libraryStats(): LibraryStats = withContext(Dispatchers.IO) {
+        LibraryStats(
+            total = dao.countAll(),
+            indexed = dao.countIndexed()
+        )
+    }
 }
+
+data class ImportSummary(
+    val collectionsCreated: Int,
+    val collectionsSkipped: Int,
+    val membershipsApplied: Int
+)
+
+data class LibraryStats(
+    val total: Int,
+    val indexed: Int
+)
 
 data class CodeMatch(
     val entity: ScreenshotEntity,

@@ -25,7 +25,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.peexr.sift.SiftApplication
 import com.peexr.sift.data.repository.ScreenshotRepository
 import com.peexr.sift.ui.collections.CollectionDetailRoute
 import com.peexr.sift.ui.collections.CollectionDetailViewModel
@@ -35,7 +37,8 @@ import com.peexr.sift.ui.library.LibraryRoute
 import com.peexr.sift.ui.library.LibraryViewModel
 import com.peexr.sift.ui.review.ReviewRoute
 import com.peexr.sift.ui.review.ReviewViewModel
-import com.peexr.sift.ui.settings.SettingsDialog
+import com.peexr.sift.ui.settings.SettingsRoute
+import com.peexr.sift.ui.settings.SettingsViewModel
 import com.peexr.sift.ui.viewer.ViewerRoute
 import com.peexr.sift.ui.viewer.ViewerViewModel
 
@@ -54,7 +57,7 @@ fun SiftMainApp(
         )
     }
     var openCreateSheetOnCollections by remember { mutableStateOf(startOnCollectionsWithCreateSheet) }
-    var showSettingsDialog by remember { mutableStateOf(false) }
+    var showSettingsScreen by remember { mutableStateOf(false) }
     var openCollectionId by remember { mutableStateOf<String?>(null) }
     var reviewCollectionId by remember { mutableStateOf<String?>(null) }
     var viewerScreenshotId by remember { mutableStateOf<Long?>(null) }
@@ -83,7 +86,7 @@ fun SiftMainApp(
                     is SiftDestination.Library -> {
                         LibraryRoute(
                             viewModel = libraryViewModel,
-                            onOpenSettings = { showSettingsDialog = true },
+                            onOpenSettings = { showSettingsScreen = true },
                             onOpenScreenshot = { item -> viewerScreenshotId = item.id }
                         )
                     }
@@ -159,9 +162,30 @@ fun SiftMainApp(
                 }
             }
 
-            // Floating pill nav: hidden while a collection or viewer is open
+            // Settings overlay on top of tabs with slide and fade transition
             AnimatedVisibility(
-                visible = openCollectionId == null && viewerScreenshotId == null,
+                visible = showSettingsScreen,
+                enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
+                exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                val context = LocalContext.current
+                val app = context.applicationContext as SiftApplication
+                val settingsViewModel: SettingsViewModel = viewModel(
+                    factory = SettingsViewModel.Factory(repository, app)
+                )
+                BackHandler {
+                    showSettingsScreen = false
+                }
+                SettingsRoute(
+                    viewModel = settingsViewModel,
+                    onBack = { showSettingsScreen = false }
+                )
+            }
+
+            // Floating pill nav: hidden while a collection, viewer, or settings is open
+            AnimatedVisibility(
+                visible = openCollectionId == null && viewerScreenshotId == null && !showSettingsScreen,
                 enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
                 exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
                 modifier = Modifier.align(Alignment.BottomCenter)
@@ -173,12 +197,5 @@ fun SiftMainApp(
                 )
             }
         }
-    }
-
-
-    if (showSettingsDialog) {
-        SettingsDialog(
-            onDismiss = { showSettingsDialog = false }
-        )
     }
 }

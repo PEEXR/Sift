@@ -298,8 +298,8 @@ private fun InteractiveTopCard(
             if (keepStampAlpha > 0.01f) {
                 Surface(
                     shape = RoundedCornerShape(14.dp),
-                    color = Color(0xFFC6F24E).copy(alpha = 0.92f),
-                    border = BorderStroke(4.dp, Color(0xFF4C6B00)),
+                    color = SiftTheme.extended.keepAccent.copy(alpha = 0.92f),
+                    border = BorderStroke(4.dp, SiftTheme.extended.onKeepAccent),
                     modifier = Modifier
                         .padding(top = 30.dp, start = 24.dp)
                         .rotate(-12f)
@@ -310,7 +310,7 @@ private fun InteractiveTopCard(
                         fontFamily = BricolageGrotesque,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 30.sp,
-                        color = Color(0xFF4C6B00),
+                        color = SiftTheme.extended.onKeepAccent,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                     )
                 }
@@ -321,8 +321,8 @@ private fun InteractiveTopCard(
                 val stampText = if (isSearchMode) "DELETE" else "REMOVE"
                 Surface(
                     shape = RoundedCornerShape(14.dp),
-                    color = Color(0xFFFFB4A8).copy(alpha = 0.95f),
-                    border = BorderStroke(4.dp, Color(0xFF8A1C0B)),
+                    color = SiftTheme.extended.removeAccent.copy(alpha = 0.95f),
+                    border = BorderStroke(4.dp, SiftTheme.extended.onRemoveAccent),
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(top = 30.dp, end = 24.dp)
@@ -334,7 +334,7 @@ private fun InteractiveTopCard(
                         fontFamily = BricolageGrotesque,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 30.sp,
-                        color = Color(0xFF8A1C0B),
+                        color = SiftTheme.extended.onRemoveAccent,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                     )
                 }

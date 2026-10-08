@@ -71,6 +71,14 @@ class ModelStore(
         return true
     }
 
+    fun deleteModel() {
+        val dir = File(context.filesDir, "models/embeddinggemma2-q4")
+        if (dir.exists()) {
+            dir.deleteRecursively()
+        }
+        _state.value = ModelState.NotInstalled
+    }
+
     init {
         if (isInstalled()) {
             _state.value = ModelState.Ready

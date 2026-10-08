@@ -80,7 +80,8 @@ class SiftApplication : Application() {
             context = this,
             database = database,
             perceptionEngine = perceptionEngine,
-            jevApiClient = jevApiClient
+            jevApiClient = jevApiClient,
+            zThresholdProvider = { settingsManager.autoFillSensitivity.zThreshold }
         )
 
         EmbeddingScheduler.enqueueIndexing(this)

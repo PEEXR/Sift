@@ -3,6 +3,12 @@ package com.peexr.sift.data.collections
 import com.peexr.sift.data.search.dot
 import kotlin.math.sqrt
 
+enum class AutoFillSensitivity(val zThreshold: Float, val label: String) {
+    STRICT(2.0f, "Strict"),
+    BALANCED(1.5f, "Balanced"),
+    LOOSE(1.0f, "Loose")
+}
+
 /**
  * Pure matching logic for auto-filling collections via EmbeddingGemma 2 representations.
  *

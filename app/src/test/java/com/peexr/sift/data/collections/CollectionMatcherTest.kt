@@ -191,4 +191,19 @@ class CollectionMatcherTest {
         )
         assertEquals(expected, CollectionMatcher.BACKGROUND_DESCRIPTIONS)
     }
+
+    @Test
+    fun autoFillSensitivity_ordering_strictGreaterThanBalancedGreaterThanLoose() {
+        assertTrue(
+            "STRICT threshold must be greater than BALANCED",
+            AutoFillSensitivity.STRICT.zThreshold > AutoFillSensitivity.BALANCED.zThreshold
+        )
+        assertTrue(
+            "BALANCED threshold must be greater than LOOSE",
+            AutoFillSensitivity.BALANCED.zThreshold > AutoFillSensitivity.LOOSE.zThreshold
+        )
+        assertEquals(2.0f, AutoFillSensitivity.STRICT.zThreshold, 1e-4f)
+        assertEquals(1.5f, AutoFillSensitivity.BALANCED.zThreshold, 1e-4f)
+        assertEquals(1.0f, AutoFillSensitivity.LOOSE.zThreshold, 1e-4f)
+    }
 }

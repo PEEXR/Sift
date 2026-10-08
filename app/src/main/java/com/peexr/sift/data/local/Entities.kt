@@ -231,3 +231,17 @@ data class MembershipRow(
     val source: String
 )
 
+data class BackupMembershipRow(
+    val collectionId: String,
+    val displayName: String,
+    val dateAdded: Long,
+    val sizeBytes: Long
+)
+
+data class CandidateScreenshotRow(
+    val id: Long,
+    val displayName: String,
+    val dateAdded: Long,
+    val sizeBytes: Long
+)
+

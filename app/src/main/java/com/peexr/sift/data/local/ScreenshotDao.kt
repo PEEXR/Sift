@@ -207,4 +207,41 @@ interface ScreenshotDao {
 
     @Query("SELECT collectionId, source FROM screenshot_collections WHERE screenshotId = :id")
     fun getMembershipsForScreenshotFlow(id: Long): Flow<List<MembershipRow>>
+
+    // Backup & Restore
+    @Query("SELECT * FROM collections ORDER BY name ASC")
+    suspend fun getAllCollections(): List<CollectionEntity>
+
+    @Query("""
+        SELECT sc.collectionId, s.displayName, s.dateAdded, s.sizeBytes
+        FROM screenshot_collections sc
+        INNER JOIN screenshots s ON s.id = sc.screenshotId
+        WHERE sc.source = 'MANUAL'
+    """)
+    suspend fun getManualBackupMemberships(): List<BackupMembershipRow>
+
+    @Query("""
+        SELECT sc.collectionId, s.displayName, s.dateAdded, s.sizeBytes
+        FROM screenshot_collections sc
+        INNER JOIN screenshots s ON s.id = sc.screenshotId
+        WHERE sc.source = 'EXCLUDED'
+    """)
+    suspend fun getExcludedBackupMemberships(): List<BackupMembershipRow>
+
+    @Query("SELECT id, displayName, dateAdded, sizeBytes FROM screenshots")
+    suspend fun getAllCandidatesForBackup(): List<CandidateScreenshotRow>
+
+    // Re-indexing
+    @Query("UPDATE screenshots SET isProcessed = 0, ocrText = '', visualLabels = '', embedding = NULL")
+    suspend fun resetAllScreenshotsForReindexing()
+
+    @Query("DELETE FROM screenshot_collections WHERE source = 'AUTO'")
+    suspend fun clearAllAutoMemberships()
+
+    // Library stats
+    @Query("SELECT COUNT(*) FROM screenshots")
+    suspend fun countAll(): Int
+
+    @Query("SELECT COUNT(*) FROM screenshots WHERE isProcessed = 1 AND embedding IS NOT NULL")
+    suspend fun countIndexed(): Int
 }
