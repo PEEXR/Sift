@@ -14,6 +14,8 @@ import com.peexr.sift.data.embedding.EmbeddingScheduler
 import com.peexr.sift.data.embedding.EmbeddingWorker
 import com.peexr.sift.data.embedding.ModelState
 import com.peexr.sift.data.embedding.isWorkRunning
+import com.peexr.sift.data.embedding.resolveBudget
+import com.peexr.sift.data.embedding.secondsPerImageAt
 import com.peexr.sift.data.embedding.shouldAutoIndex
 import com.peexr.sift.data.model.ScreenshotItem
 import com.peexr.sift.data.repository.ScreenshotRepository
@@ -75,8 +77,8 @@ sealed interface IndexingUi {
     data class NeedsModel(val sizeMb: Int = 316) : IndexingUi
     data class Downloading(val fraction: Float) : IndexingUi
     data class ModelFailed(val message: String) : IndexingUi
-    data class Pending(val remaining: Int) : IndexingUi
-    data class Running(val done: Int, val total: Int, val remaining: Int) : IndexingUi
+    data class Pending(val remaining: Int, val secondsPerItem: Long = 11L) : IndexingUi
+    data class Running(val done: Int, val total: Int, val remaining: Int, val secondsPerItem: Long = 11L) : IndexingUi
 }
 
 /**
@@ -175,7 +177,8 @@ fun computeIndexingUi(
     modelState: ModelState,
     countNeeding: Int,
     workInfos: List<WorkInfo>,
-    isModelInstalled: Boolean
+    isModelInstalled: Boolean,
+    secondsPerItem: Long = 11L
 ): IndexingUi {
     val runningWork = workInfos.firstOrNull { it.state == WorkInfo.State.RUNNING }
     if (runningWork != null) {
@@ -183,7 +186,12 @@ fun computeIndexingUi(
         val progressTotal = runningWork.progress.getInt(EmbeddingWorker.KEY_TOTAL, 0)
         val total = if (progressTotal > 0) progressTotal else (done + countNeeding).coerceAtLeast(1)
         val remaining = (total - done).coerceAtLeast(0)
-        return IndexingUi.Running(done = done, total = total, remaining = remaining)
+        return IndexingUi.Running(
+            done = done,
+            total = total,
+            remaining = remaining,
+            secondsPerItem = secondsPerItem
+        )
     }
 
     return when (modelState) {
@@ -197,14 +205,14 @@ fun computeIndexingUi(
         }
         is ModelState.NotInstalled -> {
             if (isModelInstalled) {
-                if (countNeeding > 0) IndexingUi.Pending(remaining = countNeeding) else IndexingUi.Hidden
+                if (countNeeding > 0) IndexingUi.Pending(remaining = countNeeding, secondsPerItem = secondsPerItem) else IndexingUi.Hidden
             } else {
                 IndexingUi.NeedsModel(sizeMb = 316)
             }
         }
         is ModelState.Ready -> {
             if (countNeeding > 0) {
-                IndexingUi.Pending(remaining = countNeeding)
+                IndexingUi.Pending(remaining = countNeeding, secondsPerItem = secondsPerItem)
             } else {
                 IndexingUi.Hidden
             }
@@ -256,11 +264,20 @@ class LibraryViewModel(
         repository.countNeedingIndexingFlow,
         WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(EmbeddingScheduler.UNIQUE_WORK_NAME)
     ) { modelState, countNeeding, workInfos ->
+        val quality = app.settingsManager.indexingQuality
+        val measured = app.settingsManager.measuredSecPerImageAt280
+        // While the worker runs, trust the budget it reports: re-deriving it here flips at the target boundary.
+        val runningBudget = workInfos.firstOrNull { it.state == androidx.work.WorkInfo.State.RUNNING }
+            ?.progress?.getInt(EmbeddingWorker.KEY_BUDGET, 0)?.takeIf { it > 0 }
+        val budget = runningBudget ?: resolveBudget(quality, measured, countNeeding)
+        val secPerImage = secondsPerImageAt(budget, measured ?: 11.0)
+        val secondsPerItem = Math.round(secPerImage + 1.0).coerceAtLeast(1L)
         computeIndexingUi(
             modelState = modelState,
             countNeeding = countNeeding,
             workInfos = workInfos,
-            isModelInstalled = app.modelStore.isInstalled()
+            isModelInstalled = app.modelStore.isInstalled(),
+            secondsPerItem = secondsPerItem
         )
     }
 

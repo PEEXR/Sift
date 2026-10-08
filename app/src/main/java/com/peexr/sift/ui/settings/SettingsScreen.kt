@@ -39,6 +39,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
@@ -62,7 +63,11 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.peexr.sift.data.collections.AutoFillSensitivity
+import com.peexr.sift.data.embedding.IndexingQuality
 import com.peexr.sift.data.embedding.ModelState
+import com.peexr.sift.data.embedding.chooseAutoBudget
+import com.peexr.sift.data.embedding.estimateTotalSeconds
+import com.peexr.sift.ui.library.formatEta
 import com.peexr.sift.ui.theme.SiftTheme
 
 private val OPEN_SOURCE_LICENSES = listOf(
@@ -128,6 +133,7 @@ fun SettingsRoute(
         onSetAutoFillSensitivity = viewModel::setAutoFillSensitivity,
         onExportCollections = { exportLauncher.launch("sift-collections.json") },
         onImportCollections = { importLauncher.launch(arrayOf("application/json", "text/plain")) },
+        onSetIndexingQuality = viewModel::setIndexingQuality,
         modifier = modifier
     )
 }
@@ -150,6 +156,7 @@ fun SettingsScreen(
     onSetAutoFillSensitivity: (AutoFillSensitivity) -> Unit,
     onExportCollections: () -> Unit,
     onImportCollections: () -> Unit,
+    onSetIndexingQuality: (IndexingQuality) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -415,6 +422,121 @@ fun SettingsScreen(
                             Text("Re-index everything")
                         }
                     }
+                }
+            }
+
+            // Section: Indexing quality
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Text(
+                        text = "Indexing quality",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+
+                    val waitingCount = (uiState.libraryStats.total - uiState.libraryStats.indexed).coerceAtLeast(0)
+                    val measured = uiState.measuredSecPerImageAt280
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val qualities = listOf(
+                            IndexingQuality.AUTO,
+                            IndexingQuality.FAST,
+                            IndexingQuality.BALANCED,
+                            IndexingQuality.BEST
+                        )
+
+                        qualities.forEach { quality ->
+                            val isSelected = uiState.indexingQuality == quality
+
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = if (isSelected) {
+                                    MaterialTheme.colorScheme.surfaceContainerHighest
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceContainerHigh
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .selectable(
+                                        selected = isSelected,
+                                        role = Role.RadioButton,
+                                        onClick = { onSetIndexingQuality(quality) }
+                                    )
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    RadioButton(
+                                        selected = isSelected,
+                                        onClick = null
+                                    )
+
+                                    Column(
+                                        modifier = Modifier.weight(1f),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Text(
+                                            text = quality.label,
+                                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = quality.hint,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+
+                                        if (isSelected) {
+                                            val estimateText = if (measured != null) {
+                                                val budget = if (quality == IndexingQuality.AUTO) {
+                                                    chooseAutoBudget(measured, waitingCount)
+                                                } else {
+                                                    quality.budget ?: 140
+                                                }
+                                                val totalSec = estimateTotalSeconds(budget, measured, waitingCount)
+                                                val eta = formatEta(totalSec)
+                                                val countStr = "$waitingCount waiting screenshot${if (waitingCount == 1) "" else "s"}"
+                                                "${eta.replaceFirstChar { it.uppercase() }} for $countStr at this setting"
+                                            } else {
+                                                "Sift will time the first few screenshots to choose a speed"
+                                            }
+                                            Text(
+                                                text = estimateText,
+                                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                                                color = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.padding(top = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = "Applies to screenshots indexed from now on.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
 

@@ -193,4 +193,16 @@ class LibraryLogicTest {
         )
         assertEquals(IndexingUi.ModelFailed("Disk full"), failedUi)
     }
+
+    @Test
+    fun testComputeIndexingUiWithCustomSecondsPerItem() {
+        val pendingUi = computeIndexingUi(
+            modelState = ModelState.Ready,
+            countNeeding = 20,
+            workInfos = emptyList(),
+            isModelInstalled = true,
+            secondsPerItem = 6L
+        )
+        assertEquals(IndexingUi.Pending(remaining = 20, secondsPerItem = 6L), pendingUi)
+    }
 }

@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.Constraints
@@ -47,6 +48,7 @@ class EmbeddingWorker(
         const val KEY_CURRENT = "current"
         const val KEY_TOTAL = "total"
         const val KEY_PROGRESS = "progress"
+        const val KEY_BUDGET = "budget"
         const val BATCH_SIZE = 25
         const val NOTIFICATION_ID = 4201
         private const val CHANNEL_ID = "sift_indexing"
@@ -133,7 +135,17 @@ class EmbeddingWorker(
         val total = itemsToProcess.size
         var processed = 0
         var embeddedCount = 0
-        Log.i(TAG, "Beginning background indexing for $total screenshots (canEmbed=$canEmbed).")
+
+        val settings = app.settingsManager
+        val quality = settings.indexingQuality
+        var measuredSec = settings.measuredSecPerImageAt280
+        val itemsNeedingEmbedding = itemsToProcess.count { it.needsEmbedding }
+        var chosenBudget = resolveBudget(quality, measuredSec, itemsNeedingEmbedding)
+
+        var isCalibrating = canEmbed && quality == IndexingQuality.AUTO && measuredSec == null && itemsNeedingEmbedding > 0
+        val calibrationSamples = mutableListOf<Double>()
+
+        Log.i(TAG, "Beginning background indexing for $total screenshots ($itemsNeedingEmbedding need embedding, chosen budget=$chosenBudget, sec/image at 280=${measuredSec ?: "unmeasured"}).")
 
         try {
             setForeground(createForegroundInfo(0, total))
@@ -143,14 +155,27 @@ class EmbeddingWorker(
             Log.w(TAG, "Could not start foreground service; continuing indexing best-effort in background", e)
         }
 
+        fun finalizeMeasurement() {
+            if (isCalibrating && calibrationSamples.isNotEmpty()) {
+                val median = computeMedian(calibrationSamples)
+                measuredSec = updateMeasurement(previous = null, observedSeconds = median, budgetUsed = 140)
+                settings.measuredSecPerImageAt280 = measuredSec
+                isCalibrating = false
+            } else if (measuredSec != null) {
+                settings.measuredSecPerImageAt280 = measuredSec
+            }
+        }
+
         for (batch in itemsToProcess.chunked(BATCH_SIZE)) {
             if (isStopped) {
+                finalizeMeasurement()
                 Log.i(TAG, "Worker stopped before batch, requesting retry.")
                 return@withContext Result.retry()
             }
 
             for (item in batch) {
                 if (isStopped) {
+                    finalizeMeasurement()
                     Log.i(TAG, "Worker stopped during batch, requesting retry.")
                     return@withContext Result.retry()
                 }
@@ -177,11 +202,34 @@ class EmbeddingWorker(
 
                 // 2. Multimodal embedding if needed and model is ready
                 if (item.needsEmbedding && canEmbed && embeddingEngine != null) {
+                    val budgetToUse = if (isCalibrating) 140 else chosenBudget
                     try {
-                        val embedding = embeddingEngine.embedImage(uri)
+                        val t0 = SystemClock.elapsedRealtime()
+                        val embedding = embeddingEngine.embedImage(uri, maxSoftTokens = budgetToUse)
+                        val elapsedSec = (SystemClock.elapsedRealtime() - t0) / 1000.0
+
                         if (embedding != null) {
                             dao.updateEmbedding(item.id, embedding.toByteArray())
                             embeddedCount++
+
+                            if (isCalibrating) {
+                                calibrationSamples.add(elapsedSec)
+                                if (calibrationSamples.size >= 3) {
+                                    val remainingSamples = calibrationSamples.drop(1)
+                                    val median = computeMedian(remainingSamples)
+                                    measuredSec = updateMeasurement(previous = null, observedSeconds = median, budgetUsed = 140)
+                                    settings.measuredSecPerImageAt280 = measuredSec
+                                    isCalibrating = false
+                                    val remainingPending = (itemsNeedingEmbedding - embeddedCount).coerceAtLeast(0)
+                                    chosenBudget = resolveBudget(quality, measuredSec, remainingPending)
+                                    Log.i(TAG, "Calibration completed: median ${median}s at budget 140 -> secPerImageAt280=${measuredSec}s. New budget: $chosenBudget")
+                                }
+                            } else {
+                                measuredSec = updateMeasurement(previous = measuredSec, observedSeconds = elapsedSec, budgetUsed = budgetToUse)
+                                if (embeddedCount % 10 == 0) {
+                                    settings.measuredSecPerImageAt280 = measuredSec
+                                }
+                            }
                         } else {
                             Log.w(TAG, "Could not compute embedding for screenshot id=${item.id}")
                         }
@@ -197,7 +245,8 @@ class EmbeddingWorker(
                     workDataOf(
                         KEY_CURRENT to processed,
                         KEY_TOTAL to total,
-                        KEY_PROGRESS to ((processed * 100) / total)
+                        KEY_PROGRESS to ((processed * 100) / total),
+                        KEY_BUDGET to (if (isCalibrating) 140 else chosenBudget)
                     )
                 )
 
@@ -213,7 +262,8 @@ class EmbeddingWorker(
             }
         }
 
-        Log.i(TAG, "Finished background indexing ($processed/$total processed, $embeddedCount embedded).")
+        finalizeMeasurement()
+        Log.i(TAG, "Finished background indexing ($processed/$total processed, $embeddedCount embedded, budget: $chosenBudget, sec/image at 280: $measuredSec).")
 
         if (embeddedCount > 0) {
             try {
@@ -226,6 +276,17 @@ class EmbeddingWorker(
         }
 
         Result.success()
+    }
+
+    private fun computeMedian(samples: List<Double>): Double {
+        if (samples.isEmpty()) return 0.0
+        val sorted = samples.sorted()
+        val mid = sorted.size / 2
+        return if (sorted.size % 2 == 1) {
+            sorted[mid]
+        } else {
+            (sorted[mid - 1] + sorted[mid]) / 2.0
+        }
     }
 }
 

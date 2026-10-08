@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.peexr.sift.SiftApplication
 import com.peexr.sift.data.collections.AutoFillSensitivity
 import com.peexr.sift.data.embedding.EmbeddingScheduler
+import com.peexr.sift.data.embedding.IndexingQuality
 import com.peexr.sift.data.embedding.ModelState
 import com.peexr.sift.data.repository.LibraryStats
 import com.peexr.sift.data.repository.ScreenshotRepository
@@ -29,6 +30,8 @@ data class SettingsUiState(
     val autoIndexNewScreenshots: Boolean = true,
     val libraryStats: LibraryStats = LibraryStats(total = 0, indexed = 0),
     val autoFillSensitivity: AutoFillSensitivity = AutoFillSensitivity.BALANCED,
+    val indexingQuality: IndexingQuality = IndexingQuality.AUTO,
+    val measuredSecPerImageAt280: Double? = null,
     val isOperating: Boolean = false
 )
 
@@ -42,7 +45,9 @@ class SettingsViewModel(
             modelState = app.modelStore.state.value,
             isModelInstalled = app.modelStore.isInstalled(),
             autoIndexNewScreenshots = app.settingsManager.autoIndexNewScreenshots,
-            autoFillSensitivity = app.settingsManager.autoFillSensitivity
+            autoFillSensitivity = app.settingsManager.autoFillSensitivity,
+            indexingQuality = app.settingsManager.indexingQuality,
+            measuredSecPerImageAt280 = app.settingsManager.measuredSecPerImageAt280
         )
     )
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
@@ -64,7 +69,13 @@ class SettingsViewModel(
         viewModelScope.launch {
             try {
                 val stats = repository.libraryStats()
-                _uiState.update { it.copy(libraryStats = stats) }
+                val measured = app.settingsManager.measuredSecPerImageAt280
+                _uiState.update {
+                    it.copy(
+                        libraryStats = stats,
+                        measuredSecPerImageAt280 = measured
+                    )
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
@@ -91,6 +102,11 @@ class SettingsViewModel(
         app.settingsManager.autoIndexNewScreenshots = enabled
         EmbeddingScheduler.syncAutoIndexSchedule(app, enabled)
         _uiState.update { it.copy(autoIndexNewScreenshots = enabled) }
+    }
+
+    fun setIndexingQuality(quality: IndexingQuality) {
+        app.settingsManager.indexingQuality = quality
+        _uiState.update { it.copy(indexingQuality = quality) }
     }
 
     fun indexNow() {

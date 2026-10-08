@@ -306,7 +306,13 @@ class EmbeddingEngine(
      * @return 128-d L2-normalized FloatArray, or null if the image could not be processed.
      * @throws IllegalStateException if model is not Ready or closed.
      */
-    suspend fun embedImage(bitmap: Bitmap): FloatArray? {
+    suspend fun embedImage(
+        bitmap: Bitmap,
+        maxSoftTokens: Int = this.maxSoftTokens
+    ): FloatArray? {
+        require(maxSoftTokens in ImagePatchifier.SUPPORTED_BUDGETS) {
+            "Unsupported token budget: $maxSoftTokens. Supported: ${ImagePatchifier.SUPPORTED_BUDGETS}"
+        }
         ensureModelReady()
         val patchBatch = ImagePatchifier.processBitmap(bitmap, maxSoftTokens) ?: return null
         val (env, textSess, visionSess) = getSessions()
@@ -423,7 +429,13 @@ class EmbeddingEngine(
      * @param uri Content URI or file URI to the image.
      * @return 128-d L2-normalized FloatArray, or null if the URI could not be decoded.
      */
-    suspend fun embedImage(uri: Uri): FloatArray? = withContext(Dispatchers.IO) {
+    suspend fun embedImage(
+        uri: Uri,
+        maxSoftTokens: Int = this.maxSoftTokens
+    ): FloatArray? = withContext(Dispatchers.IO) {
+        require(maxSoftTokens in ImagePatchifier.SUPPORTED_BUDGETS) {
+            "Unsupported token budget: $maxSoftTokens. Supported: ${ImagePatchifier.SUPPORTED_BUDGETS}"
+        }
         val bitmap = try {
             context.contentResolver.openInputStream(uri)?.use { stream ->
                 val options = BitmapFactory.Options().apply {
@@ -437,7 +449,7 @@ class EmbeddingEngine(
         } ?: return@withContext null
 
         try {
-            embedImage(bitmap)
+            embedImage(bitmap, maxSoftTokens)
         } finally {
             bitmap.recycle()
         }

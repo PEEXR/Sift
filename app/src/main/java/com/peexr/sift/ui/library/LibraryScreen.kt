@@ -400,7 +400,7 @@ private fun IndexingCard(
                             )
                         }
                         is IndexingUi.Pending -> {
-                            val eta = formatEta(indexing.remaining * 11L)
+                            val eta = formatEta(indexing.remaining * indexing.secondsPerItem)
                             Text(
                                 text = "Indexing pending",
                                 style = MaterialTheme.typography.titleMedium,
@@ -413,7 +413,7 @@ private fun IndexingCard(
                             )
                         }
                         is IndexingUi.Running -> {
-                            val eta = formatEta(indexing.remaining * 11L)
+                            val eta = formatEta(indexing.remaining * indexing.secondsPerItem)
                             Text(
                                 text = "Indexing ${indexing.done} of ${indexing.total}",
                                 style = MaterialTheme.typography.titleMedium,

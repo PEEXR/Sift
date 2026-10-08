@@ -9,6 +9,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.peexr.sift.data.collections.AutoFillSensitivity
+import com.peexr.sift.data.embedding.IndexingQuality
 import com.peexr.sift.ui.theme.SiftTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -46,7 +47,8 @@ class SettingsScreenTest {
 
         composeTestRule.onNodeWithText("Smart search").assertIsDisplayed()
         composeTestRule.onNodeWithText("Indexing").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Collections").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Indexing quality").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("Collections").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("About").performScrollTo().assertIsDisplayed()
     }
 
@@ -184,5 +186,42 @@ class SettingsScreenTest {
         // Verify ONNX Runtime and Bricolage Grotesque are listed
         composeTestRule.onNodeWithText("ONNX Runtime (MIT)").assertIsDisplayed()
         composeTestRule.onNodeWithText("Bricolage Grotesque (SIL OFL 1.1)").assertIsDisplayed()
+    }
+
+    @Test
+    fun indexingQualityOptions_invokeCallbackWithCorrectValue() {
+        var selectedQuality: IndexingQuality? = null
+        val state = SettingsUiState(indexingQuality = IndexingQuality.AUTO)
+
+        composeTestRule.setContent {
+            SiftTheme {
+                SettingsScreen(
+                    uiState = state,
+                    snackbarHostState = SnackbarHostState(),
+                    onBack = {},
+                    onStartModelDownload = {},
+                    onRemoveModel = {},
+                    onSetAutoIndexEnabled = {},
+                    onIndexNow = {},
+                    onReindexEverything = {},
+                    onSetAutoFillSensitivity = {},
+                    onExportCollections = {},
+                    onImportCollections = {},
+                    onSetIndexingQuality = { selectedQuality = it }
+                )
+            }
+        }
+
+        // Tap Fast
+        composeTestRule.onNodeWithText("Fast").performScrollTo().performClick()
+        assertEquals(IndexingQuality.FAST, selectedQuality)
+
+        // Tap Balanced
+        composeTestRule.onNodeWithText("Balanced").performScrollTo().performClick()
+        assertEquals(IndexingQuality.BALANCED, selectedQuality)
+
+        // Tap Best
+        composeTestRule.onNodeWithText("Best").performScrollTo().performClick()
+        assertEquals(IndexingQuality.BEST, selectedQuality)
     }
 }

@@ -3,6 +3,7 @@ package com.peexr.sift.data.local
 import android.content.Context
 import android.content.SharedPreferences
 import com.peexr.sift.data.collections.AutoFillSensitivity
+import com.peexr.sift.data.embedding.IndexingQuality
 
 class SettingsManager(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("sift_preferences", Context.MODE_PRIVATE)
@@ -29,6 +30,35 @@ class SettingsManager(context: Context) {
             }
         }
         set(value) = prefs.edit().putString("auto_fill_sensitivity", value.name).apply()
+
+    var indexingQuality: IndexingQuality
+        get() {
+            val raw = prefs.getString("indexing_quality", IndexingQuality.AUTO.name)
+            return try {
+                if (raw != null) IndexingQuality.valueOf(raw) else IndexingQuality.AUTO
+            } catch (_: IllegalArgumentException) {
+                IndexingQuality.AUTO
+            }
+        }
+        set(value) = prefs.edit().putString("indexing_quality", value.name).apply()
+
+    var measuredSecPerImageAt280: Double?
+        get() {
+            if (!prefs.contains("measured_sec_per_image_280")) return null
+            val raw = prefs.getFloat("measured_sec_per_image_280", -1f)
+            return if (raw > 0f) raw.toDouble() else null
+        }
+        set(value) {
+            if (value != null && value > 0.0 && value.isFinite()) {
+                prefs.edit().putFloat("measured_sec_per_image_280", value.toFloat()).apply()
+            } else {
+                prefs.edit().remove("measured_sec_per_image_280").apply()
+            }
+        }
+
+    fun clearMeasurement() {
+        prefs.edit().remove("measured_sec_per_image_280").apply()
+    }
 
     var onboardingDone: Boolean
         get() = prefs.getBoolean("onboarding_done", false)

@@ -1,6 +1,7 @@
 package com.peexr.sift.data.embedding
 
 import android.content.Context
+import android.net.Uri
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -177,5 +178,16 @@ class EmbeddingEngineTest {
         val mockContext = mock(Context::class.java)
         val mockModelStore = ModelStore(mockContext)
         EmbeddingEngine(mockContext, mockModelStore, maxSoftTokens = 100)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun embedImage_unsupportedBudget_throwsIllegalArgumentException() {
+        val mockContext = mock(Context::class.java)
+        val mockModelStore = ModelStore(mockContext)
+        val engine = EmbeddingEngine(mockContext, mockModelStore)
+        val mockUri = mock(Uri::class.java)
+        runBlocking {
+            engine.embedImage(mockUri, maxSoftTokens = 100)
+        }
     }
 }
