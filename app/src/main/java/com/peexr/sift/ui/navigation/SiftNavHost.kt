@@ -45,9 +45,15 @@ fun SiftMainApp(
     libraryViewModel: LibraryViewModel,
     reviewViewModel: ReviewViewModel,
     repository: ScreenshotRepository,
-    collectionsViewModel: CollectionsViewModel
+    collectionsViewModel: CollectionsViewModel,
+    startOnCollectionsWithCreateSheet: Boolean = false
 ) {
-    var currentDestination by remember { mutableStateOf<SiftDestination>(SiftDestination.Library) }
+    var currentDestination by remember {
+        mutableStateOf<SiftDestination>(
+            if (startOnCollectionsWithCreateSheet) SiftDestination.Collections else SiftDestination.Library
+        )
+    }
+    var openCreateSheetOnCollections by remember { mutableStateOf(startOnCollectionsWithCreateSheet) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var openCollectionId by remember { mutableStateOf<String?>(null) }
     var reviewCollectionId by remember { mutableStateOf<String?>(null) }
@@ -84,7 +90,9 @@ fun SiftMainApp(
                     is SiftDestination.Collections -> {
                         CollectionsRoute(
                             viewModel = collectionsViewModel,
-                            onOpenCollection = { id -> openCollectionId = id }
+                            onOpenCollection = { id -> openCollectionId = id },
+                            openCreateSheetOnInit = openCreateSheetOnCollections,
+                            onConsumedCreateSheet = { openCreateSheetOnCollections = false }
                         )
                     }
                     is SiftDestination.Review -> {

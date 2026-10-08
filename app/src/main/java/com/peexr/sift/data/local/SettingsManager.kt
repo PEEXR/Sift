@@ -17,4 +17,8 @@ class SettingsManager(context: Context) {
     var autoIndexNewScreenshots: Boolean
         get() = prefs.getBoolean("auto_index_new", true)
         set(value) = prefs.edit().putBoolean("auto_index_new", value).apply()
+
+    var onboardingDone: Boolean
+        get() = prefs.getBoolean("onboarding_done", false)
+        set(value) = prefs.edit().putBoolean("onboarding_done", value).apply()
 }

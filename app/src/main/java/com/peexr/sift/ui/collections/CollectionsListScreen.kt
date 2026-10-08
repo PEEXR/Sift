@@ -80,6 +80,8 @@ import com.peexr.sift.ui.theme.collectionColors
 fun CollectionsRoute(
     viewModel: CollectionsViewModel,
     onOpenCollection: (String) -> Unit,
+    openCreateSheetOnInit: Boolean = false,
+    onConsumedCreateSheet: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -89,6 +91,8 @@ fun CollectionsRoute(
         onOpenCollection = onOpenCollection,
         onCreate = viewModel::createCollection,
         onDismissStatus = viewModel::clearStatusMessage,
+        openCreateSheetOnInit = openCreateSheetOnInit,
+        onConsumedCreateSheet = onConsumedCreateSheet,
         modifier = modifier
     )
 }
@@ -104,12 +108,21 @@ fun CollectionsListScreen(
     onOpenCollection: (String) -> Unit,
     onCreate: (name: String, description: String) -> Unit,
     onDismissStatus: () -> Unit,
+    openCreateSheetOnInit: Boolean = false,
+    onConsumedCreateSheet: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
-    var showCreateSheet by remember { mutableStateOf(false) }
+    var showCreateSheet by remember { mutableStateOf(openCreateSheetOnInit) }
     var newCollectionName by remember { mutableStateOf("") }
     var newCollectionDescription by remember { mutableStateOf("") }
+
+    LaunchedEffect(openCreateSheetOnInit) {
+        if (openCreateSheetOnInit) {
+            showCreateSheet = true
+            onConsumedCreateSheet()
+        }
+    }
 
     LaunchedEffect(state.statusMessage) {
         state.statusMessage?.let { msg ->

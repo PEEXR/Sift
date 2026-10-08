@@ -9,10 +9,16 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import com.peexr.sift.ui.collections.CollectionsViewModel
 import com.peexr.sift.ui.library.LibraryViewModel
 import com.peexr.sift.ui.navigation.SiftMainApp
+import com.peexr.sift.ui.onboarding.OnboardingScreen
+import com.peexr.sift.ui.onboarding.shouldShowOnboarding
 import com.peexr.sift.ui.review.ReviewViewModel
 import com.peexr.sift.ui.theme.SiftTheme
 
@@ -48,19 +54,48 @@ class MainActivity : ComponentActivity() {
         requestHighestRefreshRate()
 
         val app = application as SiftApplication
+        val hasMedia = hasMediaPermission()
+        val modelInstalled = app.modelStore.isInstalled()
+        val showOnboarding = shouldShowOnboarding(
+            onboardingDone = app.settingsManager.onboardingDone,
+            hasMediaPermission = hasMedia,
+            modelInstalled = modelInstalled
+        )
 
         setContent {
+            var isOnboarding by remember { mutableStateOf(showOnboarding) }
+            var startOnCollectionsWithCreateSheet by remember { mutableStateOf(false) }
+
             SiftTheme {
-                SiftMainApp(
-                    libraryViewModel = libraryViewModel,
-                    reviewViewModel = reviewViewModel,
-                    repository = (application as SiftApplication).repository,
-                    collectionsViewModel = collectionsViewModel
-                )
+                if (isOnboarding) {
+                    OnboardingScreen(
+                        app = app,
+                        onPhotosGranted = { libraryViewModel.syncScreenshots() },
+                        onFinish = { openCollectionsCreateSheet ->
+                            app.settingsManager.onboardingDone = true
+                            startOnCollectionsWithCreateSheet = openCollectionsCreateSheet
+                            isOnboarding = false
+                            libraryViewModel.autoIndexIfNeeded()
+                        }
+                    )
+                } else {
+                    SiftMainApp(
+                        libraryViewModel = libraryViewModel,
+                        reviewViewModel = reviewViewModel,
+                        repository = app.repository,
+                        collectionsViewModel = collectionsViewModel,
+                        startOnCollectionsWithCreateSheet = startOnCollectionsWithCreateSheet
+                    )
+                }
             }
         }
 
-        checkAndRequestPermissions()
+        if (!showOnboarding) {
+            if (hasMedia && modelInstalled) {
+                app.settingsManager.onboardingDone = true
+            }
+            checkAndRequestPermissions()
+        }
     }
 
     override fun onStart() {
@@ -79,6 +114,17 @@ class MainActivity : ComponentActivity() {
             .filter { it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight }
             .maxByOrNull { it.refreshRate } ?: return
         window.attributes = window.attributes.also { it.preferredDisplayModeId = best.modeId }
+    }
+
+    private fun hasMediaPermission(): Boolean {
+        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
+        } else {
+            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+        return permissions.all {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
     }
 
     private fun checkAndRequestPermissions() {
