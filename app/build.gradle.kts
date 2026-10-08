@@ -1,3 +1,6 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -23,13 +26,44 @@ android {
         }
     }
 
+    val keystorePropertiesFile = System.getenv("SIFT_KEYSTORE_PROPERTIES")?.takeIf { it.isNotBlank() }?.let { file(it) }
+        ?: file("${System.getProperty("user.home")}/.sift-signing/keystore.properties")
+    val hasKeystore = keystorePropertiesFile.exists() && keystorePropertiesFile.isFile
+
+    if (!hasKeystore) {
+        logger.warn("Keystore properties file not found ($keystorePropertiesFile). Release build will be unsigned.")
+    }
+
+    signingConfigs {
+        create("release") {
+            if (hasKeystore) {
+                val properties = Properties().apply {
+                    FileInputStream(keystorePropertiesFile).use { load(it) }
+                }
+                storeFile = file(properties.getProperty("storeFile"))
+                storePassword = properties.getProperty("storePassword")
+                keyAlias = properties.getProperty("keyAlias")
+                keyPassword = properties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            if (hasKeystore) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            isDebuggable = false
+            // ONNX Runtime ships ~35-40 MB per ABI; every supported phone is arm64 (emulators use a debug build).
+            ndk {
+                abiFilters += listOf("arm64-v8a")
+            }
         }
         // Release-like build for measuring performance on device: not debuggable, debug-signed so it
         // installs over the debug app and keeps its data (model files, database).
@@ -38,6 +72,8 @@ android {
             signingConfig = signingConfigs.getByName("debug")
             matchingFallbacks += listOf("release")
             isDebuggable = false
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
     compileOptions {

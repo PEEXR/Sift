@@ -1,4 +1,5 @@
 *.iml
+Screenshots/
 .gradle/
 /local.properties
 local.properties
@@ -13,3 +14,8 @@ local.properties
 *.hprof
 *.apk
 *.aab
+
+# Signing material must never be committed
+*.jks
+*.keystore
+keystore.properties

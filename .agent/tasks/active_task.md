@@ -6,32 +6,38 @@ Source RFC: `docs/RFC_LOCAL_AI_STACK.md` (Phase 2, adapted: **ONNX Runtime inste
 
 **EXECUTION RULE (hard): Do NOT run Gradle, adb, tests, or ANY long-running/background command. Only read files and edit/create files. The orchestrator builds and tests. Finish your turn promptly with a summary.**
 
-## THIS DISPATCH = Stage 9: auto-fill learns from the user's keep/remove swipes
+## THIS DISPATCH = Stage 10: release build configuration (signing, R8 shrinking, manifest hardening)
 
-Goal: a collection's matching improves as the user reviews. Kept (MANUAL) screenshots pull the collection's query vector toward what the user considers a match; removed (EXCLUDED) screenshots push it away (Rocchio-style relevance feedback). No training, no new model, deterministic and cheap (128-d vectors).
+Goal: `./gradlew assembleRelease` produces a signed, shrunk, optimised APK (and `bundleRelease` an AAB). The orchestrator has ALREADY created the signing key OUTSIDE the repo: `C:/Users/systems/.sift-signing/sift-release.jks` with `C:/Users/systems/.sift-signing/keystore.properties` (keys: `storeFile`, `storePassword`, `keyAlias`, `keyPassword`). NEVER copy secrets into the repo; never print passwords.
 
-Read FIRST: `data/collections/CollectionMatcher.kt` (`match`, `zScore`, `BACKGROUND_DESCRIPTIONS`), `data/repository/ScreenshotRepository.kt` (`refreshAutoCollections`, `getOrEmbedText`, `keepInCollection`, `removeFromCollection`), `data/local/ScreenshotDao.kt` (`getAllEmbeddings`, `replaceAutoMembers`), `data/local/Entities.kt` (`EmbeddingRow`, `MembershipSource`), `data/search/VectorMath.kt` (dot/normalise helpers; embeddings are L2-normalised 128-d floats), `ui/review/ReviewViewModel.kt` (collection-mode session end), existing tests `app/src/test/java/com/peexr/sift/data/collections/CollectionMatcherTest.kt`. Do NOT change build files/dependencies, DB version/schema, any composable, or Jev code.
+Read FIRST: `app/build.gradle.kts` (existing `release` and `benchmark` build types, dependencies list), `app/proguard-rules.pro`, `app/src/main/AndroidManifest.xml`, `app/src/main/res/xml/*` if present. Do NOT change dependency versions, compileSdk/targetSdk, or any Kotlin source.
 
-### 1. Pure logic (CollectionMatcher.kt, JVM-tested)
-`fun refineQuery(base: FloatArray, positives: List<FloatArray>, negatives: List<FloatArray>, alpha: Float = 0.7f, beta: Float = 0.4f, maxFeedback: Int = 10): FloatArray`:
-- If both lists are empty return `base` unchanged.
-- `wP = min(positives.size, maxFeedback) / maxFeedback.toFloat()`, `wN` likewise for negatives (so a handful of swipes nudges, ten or more fully applies).
-- `meanP` / `meanN` = component-wise means (skip a list if empty; ignore vectors whose size differs from `base.size`).
-- `q = base + alpha * wP * meanP - beta * wN * meanN`, then L2-normalise. If the result has norm < 1e-6 or any non-finite component, return `base`.
-Tests (append to `CollectionMatcherTest.kt` or a new `RefineQueryTest.kt`): no feedback -> same array; positives move the vector toward the positives (cosine(result, meanP) > cosine(base, meanP)); negatives move it away (cosine(result, meanN) < cosine(base, meanN)); weight scales with count (1 positive moves less than 10); output is unit length; degenerate cancelling input falls back to base; mismatched-size vectors ignored.
+### 1. Signing
+In `app/build.gradle.kts` add a `signingConfigs { create("release") { ... } }` that loads the properties file from, in order: env var `SIFT_KEYSTORE_PROPERTIES` (a path), else `${System.getProperty("user.home")}/.sift-signing/keystore.properties`. Use `java.util.Properties` + `FileInputStream`; resolve `storeFile` with `file(...)`. If the properties file does not exist, DO NOT fail the build: leave the release build type unsigned (print a Gradle `logger.warn` once) so other contributors and CI without the key can still configure the project. The `release` build type uses this signing config when it is available. Keep `benchmark` (debug-signed, `initWith(release)`) working: it must NOT inherit the release signing config (re-set its `signingConfig` to debug as it does today) and, since it inherits minify from release, set `isMinifyEnabled = false` and `isShrinkResources = false` explicitly for `benchmark` so profiling builds stay fast to build and readable.
 
-### 2. Data
-- DAO: `@Query("SELECT s.id AS id, s.embedding AS embedding FROM screenshots s INNER JOIN screenshot_collections sc ON sc.screenshotId = s.id WHERE sc.collectionId = :collectionId AND sc.source = :source AND s.embedding IS NOT NULL") suspend fun getFeedbackEmbeddings(collectionId: String, source: String): List<EmbeddingRow>` (reuse `EmbeddingRow`).
-- `ScreenshotRepository.refreshAutoCollections`: for each target collection, load kept (`MembershipSource.MANUAL`) and removed (`MembershipSource.EXCLUDED`) embeddings, decode with the existing BLOB->FloatArray helper (size must be 128), compute `refineQuery(textVector, kept, removed)` and use THAT vector in `CollectionMatcher.match`. Everything else (threshold from `zThresholdProvider`, background vectors, `replaceAutoMembers` semantics: AUTO rows replaced, MANUAL/EXCLUDED preserved) is unchanged. Do the DB reads on IO and the maths on Default.
-- Keep MANUAL members even if they would no longer match (they are the user's explicit decision) — verify `replaceAutoMembers` already guarantees this and say so in your summary.
+### 2. Shrinking
+`release`: `isMinifyEnabled = true`, `isShrinkResources = true`, `proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")`, `isDebuggable = false`. Also `ndk { debugSymbolLevel = "SYMBOL_TABLE" }` is NOT needed; skip. Keep `packaging` as is.
 
-### 3. When to refresh
-- `ReviewViewModel`: when a collection-mode session ENDS (the Done phase is reached, or the user leaves collection mode / presses back with at least one keep or remove performed this session), call `repository.refreshAutoCollections(onlyCollectionId = id)` once, launched in `SiftApplication.appScope` (not `viewModelScope`, so it survives leaving the screen; the ViewModel can take `app.appScope` or a `CoroutineScope` parameter with a sensible default — keep the existing constructor/Factory call sites compiling). Never refresh per swipe (it would reshuffle AUTO members while the user reviews). Do not refresh in search/cleanup modes.
-- Expose the pure decision as a small top-level function in `ui/review/` e.g. `fun shouldRefreshAfterSession(keptCount: Int, removedCount: Int): Boolean` (= either > 0) and unit-test it.
+### 3. `app/proguard-rules.pro` (replace the current minimal content; comment each block with why)
+Write keep rules for everything that is accessed reflectively/JNI so R8 cannot break the app, based on the actual dependencies in `build.gradle.kts`:
+- ONNX Runtime (`ai.onnxruntime.**` — JNI looks up Java classes/fields/methods by name): `-keep class ai.onnxruntime.** { *; }` and `-dontwarn ai.onnxruntime.**` (check if the AAR ships consumer rules; keeping is still safest).
+- requery sqlite-android (JNI): `-keep class io.requery.android.database.** { *; }`, `-keep class io.requery.android.sqlite.** { *; }`, `-dontwarn io.requery.**`.
+- Room: entities/DAOs/`@Database` classes and generated `_Impl` classes (Room ships consumer rules; add belt-and-braces `-keep class * extends androidx.room.RoomDatabase`, `-keep @androidx.room.Entity class *`, `-keepclassmembers` for `@androidx.room.*`), plus all Room query-result holder data classes in `com.peexr.sift.data.local` (they are populated by generated code by name/constructor): `-keep class com.peexr.sift.data.local.** { *; }`.
+- kotlinx.serialization: `-keepattributes *Annotation*, InnerClasses`, `-keep,includedescriptorclasses class com.peexr.sift.**$$serializer { *; }`, `-keepclassmembers class com.peexr.sift.** { *** Companion; }`, `-keepclasseswithmembers class com.peexr.sift.** { kotlinx.serialization.KSerializer serializer(...); }`, and keep `@kotlinx.serialization.Serializable` classes in `com.peexr.sift.data.**` (embedding tokenizer/manifest models, backup file models, Jev models).
+- WorkManager workers instantiated by class name: `-keep class * extends androidx.work.ListenableWorker { public <init>(android.content.Context, androidx.work.WorkerParameters); }`.
+- ML Kit / Play services text recognition and image labeling: `-dontwarn com.google.mlkit.**`, `-keep class com.google.mlkit.** { *; }` only if the libs lack consumer rules (do not over-keep Play services; keep it narrow, `-dontwarn` others).
+- Coil 2.x, OkHttp 4.x, Okio, Compose, coroutines: rely on their consumer rules; add only `-dontwarn okhttp3.**`, `-dontwarn okio.**`, `-dontwarn org.conscrypt.**`, `-dontwarn org.bouncycastle.**`, `-dontwarn org.openjsse.**`.
+- Keep line numbers for crash reports: `-keepattributes SourceFile,LineNumberTable` and `-renamesourcefileattribute SourceFile`.
+- The app's own code that is called only from JNI or reflection (look at `data/embedding/*` for anything touching ONNX tensors by reflection — probably nothing): keep if found.
 
-### 4. Constraints
-- Disk on IO, CPU on Default, never swallow `CancellationException`, no UI changes, no new dependencies, existing tests must keep compiling and passing (mock/stub the new DAO method where repository tests need it).
-- Do NOT run Gradle or any command. Do not commit. Finish promptly with a summary listing every file touched and any deviation.
+### 4. Manifest hardening (`AndroidManifest.xml`)
+- `android:allowBackup="false"` (screenshot text/embeddings are private and the DB is not meant to be auto-restored to a new device; collections can be exported from Settings). If a `dataExtractionRules`/`fullBackupContent` attribute exists, keep it consistent (exclude everything).
+- Ensure `android:usesCleartextTraffic="false"` (the model download is HTTPS) — check the model manifest URLs in `data/embedding/ModelStore.kt` use https; report if any is http.
+- Do not add or remove permissions; do not touch exported flags unless something is exported without need — report, don't change, anything suspicious.
+
+### 5. Constraints
+- Keep `testDebugUnitTest` / existing tests unaffected (rules apply to release only).
+- Do NOT run Gradle or any command; the orchestrator builds, inspects R8's `missing_rules.txt`/`usage.txt` and tests. Do not commit. Finish promptly with a summary listing every file touched and any deviation or anything you could not decide.
 
 ---
 
