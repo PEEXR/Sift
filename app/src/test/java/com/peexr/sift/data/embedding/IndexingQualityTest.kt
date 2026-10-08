@@ -13,15 +13,15 @@ class IndexingQualityTest {
     }
 
     @Test
-    fun chooseAutoBudget_fastPhone_selects280() {
-        // 3 s/img * 1000 = 3000s <= 28800s -> 280
-        assertEquals(280, chooseAutoBudget(3.0, 1000))
+    fun chooseAutoBudget_fastPhone_selects140() {
+        // Auto never picks 280, even when it would easily fit.
+        assertEquals(140, chooseAutoBudget(3.0, 1000))
     }
 
     @Test
-    fun chooseAutoBudget_snapdragonBaseline_selects280() {
-        // 11 s * 2354 screenshots = 25894s (7.2 h) fits the 8 h overnight target at full quality -> 280
-        assertEquals(280, chooseAutoBudget(11.0, 2354))
+    fun chooseAutoBudget_snapdragonBaseline_selects140() {
+        // 11 s at 280 -> 5.5 s at 140: 2354 screenshots = 12947s (3.6 h) fits the 8 h target
+        assertEquals(140, chooseAutoBudget(11.0, 2354))
     }
 
     @Test
@@ -38,21 +38,21 @@ class IndexingQualityTest {
     }
 
     @Test
-    fun chooseAutoBudget_tinyPending_alwaysSelects280() {
+    fun chooseAutoBudget_tinyPending_selects140() {
         // Even on slow phones, small batches complete quickly
-        assertEquals(280, chooseAutoBudget(20.0, 1))
-        assertEquals(280, chooseAutoBudget(20.0, 10))
-        assertEquals(280, chooseAutoBudget(30.0, 50))
+        assertEquals(140, chooseAutoBudget(20.0, 1))
+        assertEquals(140, chooseAutoBudget(20.0, 10))
+        assertEquals(140, chooseAutoBudget(30.0, 50))
     }
 
     @Test
     fun chooseAutoBudget_boundaryExactlyAtTarget() {
         // Target is 21600.0s
-        // With 100 items, 216.0 s/img * 100 = 21600.0s -> fits exactly at 280
-        assertEquals(280, chooseAutoBudget(216.0, 100, targetSeconds = 21600.0))
+        // 140 costs half of the 280 time: 432 s/img at 280 -> 216 s at 140 -> 100 items = 21600.0s, fits exactly
+        assertEquals(140, chooseAutoBudget(432.0, 100, targetSeconds = 21600.0))
 
-        // Just 0.1s over target forces drop to 140
-        assertEquals(140, chooseAutoBudget(216.01, 100, targetSeconds = 21600.0))
+        // Just over the target forces the drop to 70
+        assertEquals(70, chooseAutoBudget(432.02, 100, targetSeconds = 21600.0))
     }
 
     @Test
@@ -107,8 +107,8 @@ class IndexingQualityTest {
     @Test
     fun resolveBudget_autoQualityUsesCostModel() {
         assertEquals(140, resolveBudget(IndexingQuality.AUTO, secPerImageAt280 = 20.0, pendingCount = 2354))
-        assertEquals(280, resolveBudget(IndexingQuality.AUTO, secPerImageAt280 = 11.0, pendingCount = 2354))
-        assertEquals(280, resolveBudget(IndexingQuality.AUTO, secPerImageAt280 = 3.0, pendingCount = 1000))
+        assertEquals(140, resolveBudget(IndexingQuality.AUTO, secPerImageAt280 = 11.0, pendingCount = 2354))
+        assertEquals(140, resolveBudget(IndexingQuality.AUTO, secPerImageAt280 = 3.0, pendingCount = 1000))
         assertEquals(140, resolveBudget(IndexingQuality.AUTO, secPerImageAt280 = null, pendingCount = 500))
     }
 

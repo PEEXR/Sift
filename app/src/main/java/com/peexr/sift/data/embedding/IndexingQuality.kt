@@ -14,8 +14,8 @@ enum class IndexingQuality(
 ) {
     AUTO(null, "Auto", "Picks a speed that finishes overnight"),
     FAST(70, "Fast", "Quickest, slightly less accurate on small text"),
-    BALANCED(140, "Balanced", "Good accuracy, about half the time of Best"),
-    BEST(280, "Best", "Most accurate, slowest")
+    BALANCED(140, "Balanced", "Recommended. Best accuracy per minute"),
+    BEST(280, "Best", "Twice as slow; helps only slightly on tight top-results lookups")
 }
 
 /**
@@ -31,7 +31,7 @@ fun secondsPerImageAt(budget: Int, secPerImageAt280: Double): Double {
  * @param secPerImageAt280 Measured inference time per image at budget 280 (or null if unmeasured).
  * @param pendingCount Number of screenshots pending embedding.
  * @param targetSeconds Target window to finish indexing within (default: 8 hours = 28,800s).
- * @return 140 if unmeasured; otherwise the largest budget in (280, 140, 70) fitting in targetSeconds; fallback 70.
+ * @return 140 if unmeasured; otherwise 140 if it fits in targetSeconds, else 70. Never 280 (that is the manual BEST preset).
  */
 fun chooseAutoBudget(
     secPerImageAt280: Double?,
@@ -42,7 +42,8 @@ fun chooseAutoBudget(
     val s = secPerImageAt280
     if (!s.isFinite() || s <= 0.0) return 140
 
-    val candidateBudgets = listOf(280, 140, 70)
+    // 280 is deliberately excluded: on a 500-screenshot test it was no more accurate than 140 but twice as slow.
+    val candidateBudgets = listOf(140, 70)
     for (budget in candidateBudgets) {
         val totalSec = secondsPerImageAt(budget, s) * pendingCount
         if (totalSec <= targetSeconds) {
