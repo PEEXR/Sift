@@ -10,14 +10,17 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
+import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.Operation
+import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.peexr.sift.SiftApplication
+import java.util.concurrent.TimeUnit
 import com.peexr.sift.data.local.IndexingRow
 import com.peexr.sift.data.search.toByteArray
 import kotlinx.coroutines.CancellationException
@@ -232,6 +235,8 @@ class EmbeddingWorker(
 object EmbeddingScheduler {
     const val UNIQUE_WORK_NAME = "com.peexr.sift.embedding_indexing"
 
+    const val PERIODIC_AUTO_INDEX_WORK_NAME = "com.peexr.sift.auto_index_periodic"
+
     /**
      * Builds standard background indexing constraints: device charging and idle.
      */
@@ -260,17 +265,53 @@ object EmbeddingScheduler {
 
     /**
      * Enqueues immediate screenshot embedding indexing work without charging or idle
-     * constraints for a user-triggered run. Uses [ExistingWorkPolicy.REPLACE] so that
-     * any pending idle-constrained worker is replaced immediately.
+     * constraints.
+     *
+     * @param replace If true, uses [ExistingWorkPolicy.REPLACE] for manual runs to replace any pending
+     *                idle-constrained work. If false, uses [ExistingWorkPolicy.KEEP] for automated runs
+     *                so in-flight indexing is never interrupted or restarted.
      */
-    fun enqueueIndexingNow(context: Context): Operation {
+    fun enqueueIndexingNow(context: Context, replace: Boolean = true): Operation {
+        val policy = if (replace) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP
         val request = OneTimeWorkRequestBuilder<EmbeddingWorker>()
             .build()
 
         return WorkManager.getInstance(context).enqueueUniqueWork(
             UNIQUE_WORK_NAME,
-            ExistingWorkPolicy.REPLACE,
+            policy,
             request
         )
+    }
+
+    /**
+     * Enqueues or cancels the periodic background catch-up indexing work.
+     *
+     * When enabled, enqueues a periodic work request (every 12h, flex 4h) with charging
+     * and battery-not-low constraints using [ExistingPeriodicWorkPolicy.KEEP].
+     * When disabled, cancels the unique periodic work.
+     */
+    fun syncAutoIndexSchedule(context: Context, enabled: Boolean): Operation {
+        val workManager = WorkManager.getInstance(context)
+        return if (enabled) {
+            val constraints = Constraints.Builder()
+                .setRequiresCharging(true)
+                .setRequiresBatteryNotLow(true)
+                .build()
+
+            val request = PeriodicWorkRequestBuilder<AutoIndexWorker>(
+                12L, TimeUnit.HOURS,
+                4L, TimeUnit.HOURS
+            )
+                .setConstraints(constraints)
+                .build()
+
+            workManager.enqueueUniquePeriodicWork(
+                PERIODIC_AUTO_INDEX_WORK_NAME,
+                ExistingPeriodicWorkPolicy.KEEP,
+                request
+            )
+        } else {
+            workManager.cancelUniqueWork(PERIODIC_AUTO_INDEX_WORK_NAME)
+        }
     }
 }

@@ -13,4 +13,8 @@ class SettingsManager(context: Context) {
     var isAutoSyncEnabled: Boolean
         get() = prefs.getBoolean("auto_sync", true)
         set(value) = prefs.edit().putBoolean("auto_sync", value).apply()
+
+    var autoIndexNewScreenshots: Boolean
+        get() = prefs.getBoolean("auto_index_new", true)
+        set(value) = prefs.edit().putBoolean("auto_index_new", value).apply()
 }

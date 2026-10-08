@@ -84,6 +84,7 @@ class SiftApplication : Application() {
         )
 
         EmbeddingScheduler.enqueueIndexing(this)
+        EmbeddingScheduler.syncAutoIndexSchedule(this, settingsManager.autoIndexNewScreenshots)
     }
 
     override fun onTerminate() {

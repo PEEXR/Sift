@@ -63,6 +63,11 @@ class MainActivity : ComponentActivity() {
         checkAndRequestPermissions()
     }
 
+    override fun onStart() {
+        super.onStart()
+        libraryViewModel.autoIndexIfNeeded()
+    }
+
     /**
      * Some OEM "smart refresh" modes keep unknown apps at 60 Hz. Ask for the panel's fastest mode at the
      * current resolution; the system may still lower it (battery saver, thermal), which is fine.
