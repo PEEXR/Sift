@@ -19,3 +19,6 @@ local.properties
 *.jks
 *.keystore
 keystore.properties
+
+# Agent configuration
+CLAUDE.md
