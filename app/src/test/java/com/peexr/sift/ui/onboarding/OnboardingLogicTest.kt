@@ -44,7 +44,9 @@ class OnboardingLogicTest {
     fun nextStep_traversesCorrectSequence() {
         assertEquals(OnboardingStep.PERMISSIONS, nextStep(OnboardingStep.WELCOME))
         assertEquals(OnboardingStep.MODEL, nextStep(OnboardingStep.PERMISSIONS))
-        assertEquals(OnboardingStep.READY, nextStep(OnboardingStep.MODEL))
+        assertEquals(OnboardingStep.COLLECTION, nextStep(OnboardingStep.MODEL))
+        assertEquals(OnboardingStep.EXAMPLES, nextStep(OnboardingStep.COLLECTION))
+        assertEquals(OnboardingStep.READY, nextStep(OnboardingStep.EXAMPLES))
         assertNull(nextStep(OnboardingStep.READY))
     }
 
@@ -53,11 +55,13 @@ class OnboardingLogicTest {
         assertNull(previousStep(OnboardingStep.WELCOME))
         assertEquals(OnboardingStep.WELCOME, previousStep(OnboardingStep.PERMISSIONS))
         assertEquals(OnboardingStep.PERMISSIONS, previousStep(OnboardingStep.MODEL))
-        assertEquals(OnboardingStep.MODEL, previousStep(OnboardingStep.READY))
+        assertEquals(OnboardingStep.MODEL, previousStep(OnboardingStep.COLLECTION))
+        assertEquals(OnboardingStep.COLLECTION, previousStep(OnboardingStep.EXAMPLES))
+        assertEquals(OnboardingStep.EXAMPLES, previousStep(OnboardingStep.READY))
     }
 
     @Test
-    fun canAdvanceFrom_respectsMediaPermissionRule() {
+    fun canAdvanceFrom_respectsRules() {
         // Welcome is always advanceable
         assertTrue(canAdvanceFrom(OnboardingStep.WELCOME, hasMediaPermission = false))
         assertTrue(canAdvanceFrom(OnboardingStep.WELCOME, hasMediaPermission = true))
@@ -69,6 +73,15 @@ class OnboardingLogicTest {
         // Model step is skippable (advanceable even without model installed)
         assertTrue(canAdvanceFrom(OnboardingStep.MODEL, hasMediaPermission = false))
         assertTrue(canAdvanceFrom(OnboardingStep.MODEL, hasMediaPermission = true))
+
+        // Collection step requires a non-blank name
+        assertFalse(canAdvanceFrom(OnboardingStep.COLLECTION, hasMediaPermission = true, collectionName = ""))
+        assertFalse(canAdvanceFrom(OnboardingStep.COLLECTION, hasMediaPermission = true, collectionName = "   "))
+        assertTrue(canAdvanceFrom(OnboardingStep.COLLECTION, hasMediaPermission = true, collectionName = "Tweets"))
+
+        // Examples step is always advanceable (can Done or Skip)
+        assertTrue(canAdvanceFrom(OnboardingStep.EXAMPLES, hasMediaPermission = false))
+        assertTrue(canAdvanceFrom(OnboardingStep.EXAMPLES, hasMediaPermission = true))
 
         // Ready step is always advanceable
         assertTrue(canAdvanceFrom(OnboardingStep.READY, hasMediaPermission = false))

@@ -670,6 +670,106 @@ class ScreenshotRepositoryTest {
         assertEquals(50, stats.total)
         assertEquals(35, stats.indexed)
     }
+
+    @Test
+    fun deleteMembership_removesMembershipFromDao() = runBlocking {
+        val repo = createRepository()
+
+        repo.deleteMembership(screenshotId = 123L, collectionId = "col_test")
+
+        verify(mockDao).removeFromCollection(123L, "col_test")
+    }
+
+    @Test
+    fun getSuggestions_whenLessThanFiveManualExamples_returnsEmpty() = runBlocking {
+        val repo = createRepository()
+
+        val fourPositives = (1L..4L).map { id ->
+            createEmbeddingRow(id, FloatArray(128) { 1f })
+        }
+        `when`(mockDao.getFeedbackEmbeddings("col_test", MembershipSource.MANUAL))
+            .thenReturn(fourPositives)
+
+        val suggestions = repo.getSuggestions("col_test")
+
+        assertTrue(suggestions.isEmpty())
+    }
+
+    @Test
+    fun getSuggestions_returnsOnlyNonMembersInThresholdRangeSortedAndLimited() = runBlocking {
+        val repo = createRepository()
+
+        // 5 positives with dimension 0 = 1.0f
+        val positives = (1L..5L).map { id ->
+            val vec = FloatArray(128) { 0f }
+            vec[0] = 1.0f
+            createEmbeddingRow(id, vec)
+        }
+        `when`(mockDao.getFeedbackEmbeddings("col_test", MembershipSource.MANUAL))
+            .thenReturn(positives)
+
+        // 5 negatives with dimension 0 = -1.0f
+        val negatives = (6L..10L).map { id ->
+            val vec = FloatArray(128) { 0f }
+            vec[0] = -1.0f
+            createEmbeddingRow(id, vec)
+        }
+        `when`(mockDao.getFeedbackEmbeddings("col_test", MembershipSource.EXCLUDED))
+            .thenReturn(negatives)
+        `when`(mockDao.getOtherManualEmbeddings("col_test"))
+            .thenReturn(emptyList())
+
+        // Members already in collection: positive IDs + screenshot 20L
+        `when`(mockDao.getMemberScreenshotIds("col_test"))
+            .thenReturn(listOf(1L, 2L, 3L, 4L, 5L, 20L))
+
+        // Candidate embeddings:
+        // 11L: strong match (dim 0 = 0.8f -> p >= 0.50, excluded)
+        // 12L: near-miss high (dim 0 = -0.1f -> p ~ 0.36, included)
+        // 13L: near-miss lower (dim 0 = -0.3f -> p ~ 0.29, included)
+        // 14L: far negative (dim 0 = -2.0f -> p < 0.15, excluded)
+        // 20L: near-miss score (dim 0 = -0.1f, but already member -> excluded)
+        fun makeCandidate(id: Long, v0: Float): EmbeddingRow {
+            val vec = FloatArray(128) { 0f }
+            vec[0] = v0
+            return createEmbeddingRow(id, vec)
+        }
+
+        val allEmbeddings = positives + negatives + listOf(
+            makeCandidate(11L, 0.8f),
+            makeCandidate(12L, -0.1f),
+            makeCandidate(13L, -0.3f),
+            makeCandidate(14L, -2.0f),
+            makeCandidate(20L, -0.1f)
+        )
+        `when`(mockDao.getAllEmbeddings()).thenReturn(allEmbeddings)
+
+        `when`(mockDao.getScreenshotsByIds(listOf(12L, 13L))).thenReturn(
+            listOf(createScreenshot(12L), createScreenshot(13L))
+        )
+        `when`(mockDao.getScreenshotsByIds(listOf(12L))).thenReturn(
+            listOf(createScreenshot(12L))
+        )
+
+        // Test with limit = 10 (returns both 12L and 13L sorted descending)
+        val suggestions = repo.getSuggestions("col_test", limit = 10)
+
+        assertEquals(2, suggestions.size)
+        assertEquals(12L, suggestions[0].screenshot.id)
+        assertEquals(13L, suggestions[1].screenshot.id)
+        assertEquals(MembershipSource.AUTO, suggestions[0].membershipSource)
+        assertEquals(MembershipSource.AUTO, suggestions[1].membershipSource)
+        assertTrue(suggestions[0].membershipScore!! >= 0.15f)
+        assertTrue(suggestions[0].membershipScore!! < 0.50f)
+        assertTrue(suggestions[1].membershipScore!! >= 0.15f)
+        assertTrue(suggestions[1].membershipScore!! < 0.50f)
+        assertTrue(suggestions[0].membershipScore!! > suggestions[1].membershipScore!!)
+
+        // Test limit = 1 respects the limit
+        val singleSuggestion = repo.getSuggestions("col_test", limit = 1)
+        assertEquals(1, singleSuggestion.size)
+        assertEquals(12L, singleSuggestion[0].screenshot.id)
+    }
 }
 
 

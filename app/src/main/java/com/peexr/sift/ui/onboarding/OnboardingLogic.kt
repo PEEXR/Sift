@@ -7,6 +7,8 @@ enum class OnboardingStep {
     WELCOME,
     PERMISSIONS,
     MODEL,
+    COLLECTION,
+    EXAMPLES,
     READY
 }
 
@@ -31,7 +33,9 @@ fun nextStep(current: OnboardingStep): OnboardingStep? {
     return when (current) {
         OnboardingStep.WELCOME -> OnboardingStep.PERMISSIONS
         OnboardingStep.PERMISSIONS -> OnboardingStep.MODEL
-        OnboardingStep.MODEL -> OnboardingStep.READY
+        OnboardingStep.MODEL -> OnboardingStep.COLLECTION
+        OnboardingStep.COLLECTION -> OnboardingStep.EXAMPLES
+        OnboardingStep.EXAMPLES -> OnboardingStep.READY
         OnboardingStep.READY -> null
     }
 }
@@ -44,7 +48,9 @@ fun previousStep(current: OnboardingStep): OnboardingStep? {
         OnboardingStep.WELCOME -> null
         OnboardingStep.PERMISSIONS -> OnboardingStep.WELCOME
         OnboardingStep.MODEL -> OnboardingStep.PERMISSIONS
-        OnboardingStep.READY -> OnboardingStep.MODEL
+        OnboardingStep.COLLECTION -> OnboardingStep.MODEL
+        OnboardingStep.EXAMPLES -> OnboardingStep.COLLECTION
+        OnboardingStep.READY -> OnboardingStep.EXAMPLES
     }
 }
 
@@ -52,13 +58,20 @@ fun previousStep(current: OnboardingStep): OnboardingStep? {
  * Checks whether the user can advance from the given [step].
  *
  * [OnboardingStep.PERMISSIONS] requires media permission to be granted.
- * Every other step can always be advanced from (MODEL is skippable).
+ * [OnboardingStep.COLLECTION] requires a non-blank [collectionName].
+ * Every other step can always be advanced from (MODEL is skippable, EXAMPLES allows skip).
  */
-fun canAdvanceFrom(step: OnboardingStep, hasMediaPermission: Boolean): Boolean {
+fun canAdvanceFrom(
+    step: OnboardingStep,
+    hasMediaPermission: Boolean,
+    collectionName: String = ""
+): Boolean {
     return when (step) {
         OnboardingStep.PERMISSIONS -> hasMediaPermission
+        OnboardingStep.COLLECTION -> collectionName.isNotBlank()
         OnboardingStep.WELCOME,
         OnboardingStep.MODEL,
+        OnboardingStep.EXAMPLES,
         OnboardingStep.READY -> true
     }
 }

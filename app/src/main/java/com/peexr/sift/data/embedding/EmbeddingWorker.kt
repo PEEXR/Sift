@@ -52,6 +52,7 @@ class EmbeddingWorker(
         const val BATCH_SIZE = 25
         const val NOTIFICATION_ID = 4201
         private const val CHANNEL_ID = "sift_indexing"
+        const val REFRESH_EVERY = 50
     }
 
     override suspend fun getForegroundInfo(): ForegroundInfo {
@@ -132,17 +133,23 @@ class EmbeddingWorker(
         }
 
         val embeddingEngine = if (canEmbed) app.embeddingEngine else null
-        val total = itemsToProcess.size
+        var total = itemsToProcess.size
         var processed = 0
         var embeddedCount = 0
+        var lastRefreshEmbeddedCount = 0
+
+        val knownIds = itemsToProcess.map { it.id }.toMutableSet()
+        val attemptedIds = HashSet<Long>()
+        var engineUsed = false
 
         val settings = app.settingsManager
         var quality = settings.indexingQuality
         var measuredSec = settings.measuredSecPerImageAt280
-        val itemsNeedingEmbedding = itemsToProcess.count { it.needsEmbedding }
-        var chosenBudget = resolveBudget(quality, measuredSec, itemsNeedingEmbedding)
+        var totalPendingEmbedding = itemsToProcess.count { it.needsEmbedding }
+        val itemsNeedingEmbedding = totalPendingEmbedding
+        var chosenBudget = resolveBudget(quality, measuredSec, totalPendingEmbedding)
 
-        var isCalibrating = canEmbed && quality == IndexingQuality.AUTO && measuredSec == null && itemsNeedingEmbedding > 0
+        var isCalibrating = canEmbed && quality == IndexingQuality.AUTO && measuredSec == null && totalPendingEmbedding > 0
         val calibrationSamples = mutableListOf<Double>()
 
         Log.i(TAG, "Beginning background indexing for $total screenshots ($itemsNeedingEmbedding need embedding, chosen budget=$chosenBudget, sec/image at 280=${measuredSec ?: "unmeasured"}).")
@@ -166,9 +173,171 @@ class EmbeddingWorker(
             }
         }
 
+        suspend fun releaseVisionIfUsed() {
+            if (engineUsed && embeddingEngine != null) {
+                try {
+                    embeddingEngine.releaseVisionSession()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Failed to release vision session", t)
+                }
+            }
+        }
+
+        suspend fun triggerRefreshCollections(reason: String) {
+            try {
+                Log.d(TAG, "Refreshing auto collections: $reason")
+                app.repository.refreshAutoCollections()
+                lastRefreshEmbeddedCount = embeddedCount
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Error refreshing auto collections: $reason", e)
+            }
+        }
+
+        suspend fun processItem(item: IndexingRow): Boolean {
+            attemptedIds.add(item.id)
+            val uri = Uri.parse(item.uri)
+
+            // 1. ML Kit OCR & perception if not already processed
+            if (!item.isProcessed) {
+                try {
+                    val perceptionResult = app.perceptionEngine.analyzeImage(uri)
+                    if (perceptionResult.isSuccess) {
+                        val perception = perceptionResult.getOrNull()!!
+                        val labelsJson = perception.visualLabels.joinToString(",")
+                        dao.updatePerception(item.id, perception.ocrText, labelsJson)
+                    } else {
+                        Log.w(TAG, "Perception analysis failed for screenshot id=${item.id}", perceptionResult.exceptionOrNull())
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error running perception for screenshot id=${item.id}", e)
+                }
+            }
+
+            var gotEmbedding = false
+            // 2. Multimodal embedding if needed and model is ready
+            if (item.needsEmbedding && canEmbed && embeddingEngine != null) {
+                // The user may change the quality in Settings mid-run: apply it from the next screenshot.
+                val currentQuality = settings.indexingQuality
+                if (currentQuality != quality) {
+                    quality = currentQuality
+                    isCalibrating = false
+                    chosenBudget = resolveBudget(quality, measuredSec, (totalPendingEmbedding - embeddedCount).coerceAtLeast(0))
+                    Log.i(TAG, "Indexing quality changed to $quality mid-run -> budget=$chosenBudget")
+                }
+                val budgetToUse = if (isCalibrating) 140 else chosenBudget
+                try {
+                    engineUsed = true
+                    val t0 = SystemClock.elapsedRealtime()
+                    val embedding = embeddingEngine.embedImage(uri, maxSoftTokens = budgetToUse)
+                    val elapsedSec = (SystemClock.elapsedRealtime() - t0) / 1000.0
+
+                    if (embedding != null) {
+                        dao.updateEmbedding(item.id, embedding.toByteArray())
+                        embeddedCount++
+                        gotEmbedding = true
+
+                        if (isCalibrating) {
+                            calibrationSamples.add(elapsedSec)
+                            if (calibrationSamples.size >= 3) {
+                                val remainingSamples = calibrationSamples.drop(1)
+                                val median = computeMedian(remainingSamples)
+                                measuredSec = updateMeasurement(previous = null, observedSeconds = median, budgetUsed = 140)
+                                settings.measuredSecPerImageAt280 = measuredSec
+                                isCalibrating = false
+                                val remainingPending = (totalPendingEmbedding - embeddedCount).coerceAtLeast(0)
+                                chosenBudget = resolveBudget(quality, measuredSec, remainingPending)
+                                Log.i(TAG, "Calibration completed: median ${median}s at budget 140 -> secPerImageAt280=${measuredSec}s. New budget: $chosenBudget")
+                            }
+                        } else {
+                            measuredSec = updateMeasurement(previous = measuredSec, observedSeconds = elapsedSec, budgetUsed = budgetToUse)
+                            if (embeddedCount % 10 == 0) {
+                                settings.measuredSecPerImageAt280 = measuredSec
+                            }
+                        }
+                    } else {
+                        Log.w(TAG, "Could not compute embedding for screenshot id=${item.id}")
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error generating embedding for screenshot id=${item.id}", e)
+                }
+            }
+
+            processed++
+            if (processed > total) {
+                total = processed
+            }
+            val progressPercent = if (total > 0) ((processed * 100) / total).coerceIn(0, 100) else 0
+            setProgress(
+                workDataOf(
+                    KEY_CURRENT to processed,
+                    KEY_TOTAL to total,
+                    KEY_PROGRESS to progressPercent,
+                    KEY_BUDGET to (if (isCalibrating) 140 else chosenBudget)
+                )
+            )
+
+            if (processed % 5 == 0 || processed == total) {
+                try {
+                    setForeground(createForegroundInfo(processed, total))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to update foreground notification at $processed/$total", e)
+                }
+            }
+
+            return gotEmbedding
+        }
+
+        suspend fun drainPendingExamples(): Boolean {
+            if (!canEmbed || embeddingEngine == null) return true
+
+            while (!isStopped) {
+                val pendingExamples = dao.getManualScreenshotsNeedingEmbedding().filter { it.id !in attemptedIds }
+                if (pendingExamples.isEmpty()) break
+
+                for ((index, example) in pendingExamples.withIndex()) {
+                    if (isStopped) return false
+                    if (example.id in attemptedIds) continue
+
+                    if (example.id !in knownIds) {
+                        knownIds.add(example.id)
+                        total++
+                        totalPendingEmbedding++
+                    }
+
+                    val gotEmbedding = processItem(example)
+
+                    if (gotEmbedding) {
+                        val remainingInList = pendingExamples.subList(index + 1, pendingExamples.size).any { it.id !in attemptedIds }
+                        if (!remainingInList) {
+                            val remainingInDb = dao.getManualScreenshotsNeedingEmbedding().any { it.id !in attemptedIds }
+                            if (!remainingInDb) {
+                                triggerRefreshCollections("after example embedding with queue empty")
+                            }
+                        }
+                    }
+
+                    if (gotEmbedding && embeddedCount > 0 && embeddedCount % REFRESH_EVERY == 0 && lastRefreshEmbeddedCount != embeddedCount) {
+                        triggerRefreshCollections("every $REFRESH_EVERY embedded ($embeddedCount embedded)")
+                    }
+                }
+            }
+            return !isStopped
+        }
+
         for (batch in itemsToProcess.chunked(BATCH_SIZE)) {
             if (isStopped) {
                 finalizeMeasurement()
+                releaseVisionIfUsed()
                 Log.i(TAG, "Worker stopped before batch, requesting retry.")
                 return@withContext Result.retry()
             }
@@ -176,98 +345,35 @@ class EmbeddingWorker(
             for (item in batch) {
                 if (isStopped) {
                     finalizeMeasurement()
+                    releaseVisionIfUsed()
                     Log.i(TAG, "Worker stopped during batch, requesting retry.")
                     return@withContext Result.retry()
                 }
 
-                val uri = Uri.parse(item.uri)
-
-                // 1. ML Kit OCR & perception if not already processed
-                if (!item.isProcessed) {
-                    try {
-                        val perceptionResult = app.perceptionEngine.analyzeImage(uri)
-                        if (perceptionResult.isSuccess) {
-                            val perception = perceptionResult.getOrNull()!!
-                            val labelsJson = perception.visualLabels.joinToString(",")
-                            dao.updatePerception(item.id, perception.ocrText, labelsJson)
-                        } else {
-                            Log.w(TAG, "Perception analysis failed for screenshot id=${item.id}", perceptionResult.exceptionOrNull())
-                        }
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error running perception for screenshot id=${item.id}", e)
-                    }
+                if (!drainPendingExamples()) {
+                    finalizeMeasurement()
+                    releaseVisionIfUsed()
+                    Log.i(TAG, "Worker stopped during manual example indexing, requesting retry.")
+                    return@withContext Result.retry()
                 }
 
-                // 2. Multimodal embedding if needed and model is ready
-                if (item.needsEmbedding && canEmbed && embeddingEngine != null) {
-                    // The user may change the quality in Settings mid-run: apply it from the next screenshot.
-                    val currentQuality = settings.indexingQuality
-                    if (currentQuality != quality) {
-                        quality = currentQuality
-                        isCalibrating = false
-                        chosenBudget = resolveBudget(quality, measuredSec, (itemsNeedingEmbedding - embeddedCount).coerceAtLeast(0))
-                        Log.i(TAG, "Indexing quality changed to $quality mid-run -> budget=$chosenBudget")
-                    }
-                    val budgetToUse = if (isCalibrating) 140 else chosenBudget
-                    try {
-                        val t0 = SystemClock.elapsedRealtime()
-                        val embedding = embeddingEngine.embedImage(uri, maxSoftTokens = budgetToUse)
-                        val elapsedSec = (SystemClock.elapsedRealtime() - t0) / 1000.0
-
-                        if (embedding != null) {
-                            dao.updateEmbedding(item.id, embedding.toByteArray())
-                            embeddedCount++
-
-                            if (isCalibrating) {
-                                calibrationSamples.add(elapsedSec)
-                                if (calibrationSamples.size >= 3) {
-                                    val remainingSamples = calibrationSamples.drop(1)
-                                    val median = computeMedian(remainingSamples)
-                                    measuredSec = updateMeasurement(previous = null, observedSeconds = median, budgetUsed = 140)
-                                    settings.measuredSecPerImageAt280 = measuredSec
-                                    isCalibrating = false
-                                    val remainingPending = (itemsNeedingEmbedding - embeddedCount).coerceAtLeast(0)
-                                    chosenBudget = resolveBudget(quality, measuredSec, remainingPending)
-                                    Log.i(TAG, "Calibration completed: median ${median}s at budget 140 -> secPerImageAt280=${measuredSec}s. New budget: $chosenBudget")
-                                }
-                            } else {
-                                measuredSec = updateMeasurement(previous = measuredSec, observedSeconds = elapsedSec, budgetUsed = budgetToUse)
-                                if (embeddedCount % 10 == 0) {
-                                    settings.measuredSecPerImageAt280 = measuredSec
-                                }
-                            }
-                        } else {
-                            Log.w(TAG, "Could not compute embedding for screenshot id=${item.id}")
-                        }
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error generating embedding for screenshot id=${item.id}", e)
-                    }
+                if (item.id in attemptedIds) {
+                    continue
                 }
 
-                processed++
-                setProgress(
-                    workDataOf(
-                        KEY_CURRENT to processed,
-                        KEY_TOTAL to total,
-                        KEY_PROGRESS to ((processed * 100) / total),
-                        KEY_BUDGET to (if (isCalibrating) 140 else chosenBudget)
-                    )
-                )
+                val gotEmbedding = processItem(item)
 
-                if (processed % 5 == 0 || processed == total) {
-                    try {
-                        setForeground(createForegroundInfo(processed, total))
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Failed to update foreground notification at $processed/$total", e)
-                    }
+                if (gotEmbedding && embeddedCount > 0 && embeddedCount % REFRESH_EVERY == 0 && lastRefreshEmbeddedCount != embeddedCount) {
+                    triggerRefreshCollections("every $REFRESH_EVERY embedded ($embeddedCount embedded)")
                 }
             }
+        }
+
+        if (!drainPendingExamples()) {
+            finalizeMeasurement()
+            releaseVisionIfUsed()
+            Log.i(TAG, "Worker stopped during final manual example indexing, requesting retry.")
+            return@withContext Result.retry()
         }
 
         finalizeMeasurement()
@@ -282,6 +388,8 @@ class EmbeddingWorker(
                 Log.e(TAG, "Error refreshing auto collections after indexing", e)
             }
         }
+
+        releaseVisionIfUsed()
 
         Result.success()
     }

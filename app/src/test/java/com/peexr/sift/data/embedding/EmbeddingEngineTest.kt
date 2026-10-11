@@ -2,7 +2,13 @@ package com.peexr.sift.data.embedding
 
 import android.content.Context
 import android.net.Uri
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -10,6 +16,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import org.mockito.Mockito.mock
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.sqrt
 
 class EmbeddingEngineTest {
@@ -188,6 +195,163 @@ class EmbeddingEngineTest {
         val mockUri = mock(Uri::class.java)
         runBlocking {
             engine.embedImage(mockUri, maxSoftTokens = 100)
+        }
+    }
+
+    @Test
+    fun idleReleaseTimer_firesAfterTimeout() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val mutex = Mutex()
+        val releaseCount = AtomicInteger(0)
+        val timer = IdleReleaseTimer(
+            timeoutMs = 50L,
+            scope = scope,
+            mutex = mutex,
+            onRelease = { releaseCount.incrementAndGet() }
+        )
+
+        try {
+            timer.reset()
+            assertTrue(timer.hasActiveJob())
+            delay(120L)
+            assertEquals(1, releaseCount.get())
+        } finally {
+            timer.cancel()
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun idleReleaseTimer_resetByActivity_delaysRelease() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val mutex = Mutex()
+        val releaseCount = AtomicInteger(0)
+        val timer = IdleReleaseTimer(
+            timeoutMs = 80L,
+            scope = scope,
+            mutex = mutex,
+            onRelease = { releaseCount.incrementAndGet() }
+        )
+
+        try {
+            timer.reset()
+            delay(40L)
+            // Activity occurs before timeout expires
+            timer.reset()
+            delay(50L)
+            // 90ms since first start, but only 50ms since reset: must not have fired yet
+            assertEquals(0, releaseCount.get())
+
+            // Wait for remaining timeout
+            delay(60L)
+            assertEquals(1, releaseCount.get())
+        } finally {
+            timer.cancel()
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun idleReleaseTimer_neverFiresDuringActiveInference() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val mutex = Mutex()
+        val releaseCount = AtomicInteger(0)
+        val timer = IdleReleaseTimer(
+            timeoutMs = 50L,
+            scope = scope,
+            mutex = mutex,
+            onRelease = { releaseCount.incrementAndGet() }
+        )
+
+        try {
+            // Simulate an active inference holding the mutex
+            mutex.lock()
+            timer.reset()
+
+            // Wait past the timeout
+            delay(100L)
+            // Mutex is held by the simulated inference, so onRelease must not have executed
+            assertEquals(0, releaseCount.get())
+
+            // Inference finishes, resets timer and unlocks mutex
+            timer.reset()
+            mutex.unlock()
+
+            // Immediately after unlocking, onRelease should not execute because timer was reset
+            assertEquals(0, releaseCount.get())
+
+            // Wait for new timeout to expire
+            delay(90L)
+            assertEquals(1, releaseCount.get())
+        } finally {
+            if (mutex.isLocked) {
+                mutex.unlock()
+            }
+            timer.cancel()
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun idleReleaseTimer_cancel_preventsRelease() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val mutex = Mutex()
+        val releaseCount = AtomicInteger(0)
+        val timer = IdleReleaseTimer(
+            timeoutMs = 50L,
+            scope = scope,
+            mutex = mutex,
+            onRelease = { releaseCount.incrementAndGet() }
+        )
+
+        try {
+            timer.reset()
+            delay(20L)
+            timer.cancel()
+            assertFalse(timer.hasActiveJob())
+            delay(80L)
+            assertEquals(0, releaseCount.get())
+        } finally {
+            timer.cancel()
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun releaseVisionSession_whenNoSessionLoaded_succeedsWithoutException() = runBlocking {
+        val mockContext = mock(Context::class.java)
+        val mockModelStore = ModelStore(mockContext)
+        val engine = EmbeddingEngine(mockContext, mockModelStore)
+        try {
+            // Should be a safe no-op when vision session was never loaded
+            engine.releaseVisionSession()
+            assertFalse(engine.isVisionSessionLoaded())
+        } finally {
+            engine.close()
+        }
+    }
+
+    @Test
+    fun embeddingEngine_close_cancelsResourcesAndStaysClosed() {
+        val mockContext = mock(Context::class.java)
+        val mockModelStore = ModelStore(mockContext)
+        val engine = EmbeddingEngine(mockContext, mockModelStore)
+
+        assertFalse(engine.isTextSessionLoaded())
+        assertFalse(engine.isVisionSessionLoaded())
+
+        engine.close()
+
+        // Calling close repeatedly must be safe
+        engine.close()
+
+        try {
+            runBlocking {
+                engine.embedText("query")
+            }
+            fail("Expected IllegalStateException when calling embedText on closed engine")
+        } catch (e: IllegalStateException) {
+            assertTrue(e.message?.contains("closed") == true)
         }
     }
 }

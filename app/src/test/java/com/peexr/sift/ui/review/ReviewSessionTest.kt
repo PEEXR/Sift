@@ -356,4 +356,108 @@ class ReviewSessionTest {
         assertTrue(session.stack.isEmpty())
         assertEquals(0, session.index)
     }
+
+    // --- Suggestions mode tests ---
+
+    @Test
+    fun suggestionsMode_startWithCards_setsModeAndSwipingPhase() {
+        val cards = listOf(
+            ReviewCard(createScreenshot(501L), "Near miss", originalScore = 0.42f)
+        )
+        val session = ReviewSession().apply(ReviewAction.StartSuggestions("col_sug", "Travel", cards))
+
+        assertEquals(ReviewMode.Suggestions("col_sug", "Travel"), session.mode)
+        assertEquals(0, session.index)
+        assertEquals(0, session.kept)
+        assertEquals(0, session.removed)
+        assertFalse(session.canUndo)
+        assertEquals(ReviewPhase.Swiping, session.phase)
+    }
+
+    @Test
+    fun suggestionsMode_emptyCards_entersEmptyPhase() {
+        val session = ReviewSession().apply(ReviewAction.StartSuggestions("col_sug", "Travel", emptyList()))
+
+        assertEquals(ReviewMode.Suggestions("col_sug", "Travel"), session.mode)
+        assertEquals(ReviewPhase.Empty, session.phase)
+    }
+
+    @Test
+    fun suggestionsMode_keepAndRemoveCountersAndUndo() {
+        val cards = listOf(
+            ReviewCard(createScreenshot(501L), "Near miss", originalScore = 0.35f),
+            ReviewCard(createScreenshot(502L), "Near miss", originalScore = 0.45f)
+        )
+
+        var session = ReviewSession().apply(ReviewAction.StartSuggestions("col_sug", "Travel", cards))
+
+        // Keep first card
+        session = session.apply(ReviewAction.Keep)
+        assertEquals(1, session.index)
+        assertEquals(1, session.kept)
+        assertEquals(0, session.removed)
+        assertTrue(session.canUndo)
+        assertEquals(ReviewPhase.Swiping, session.phase)
+
+        // Undo Keep
+        session = session.apply(ReviewAction.Undo)
+        assertEquals(0, session.index)
+        assertEquals(0, session.kept)
+        assertEquals(0, session.removed)
+        assertFalse(session.canUndo)
+
+        // Remove first card
+        session = session.apply(ReviewAction.RemoveOrMark)
+        assertEquals(1, session.index)
+        assertEquals(0, session.kept)
+        assertEquals(1, session.removed)
+        assertTrue(session.marked.isEmpty()) // Does NOT mark for deletion
+        assertTrue(session.canUndo)
+
+        // Undo Remove
+        session = session.apply(ReviewAction.Undo)
+        assertEquals(0, session.index)
+        assertEquals(0, session.kept)
+        assertEquals(0, session.removed)
+        assertFalse(session.canUndo)
+    }
+
+    @Test
+    fun suggestionsMode_donePhaseTransitionAndUndo() {
+        val cards = listOf(
+            ReviewCard(createScreenshot(501L), "Near miss", originalScore = 0.38f)
+        )
+        var session = ReviewSession().apply(ReviewAction.StartSuggestions("col_sug", "Travel", cards))
+        assertEquals(ReviewPhase.Swiping, session.phase)
+
+        session = session.apply(ReviewAction.Keep)
+        assertEquals(1, session.index)
+        assertEquals(ReviewPhase.Done, session.phase)
+
+        // Undo from Done returns to Swiping
+        session = session.apply(ReviewAction.Undo)
+        assertEquals(0, session.index)
+        assertEquals(0, session.kept)
+        assertEquals(ReviewPhase.Swiping, session.phase)
+
+        // Swiping left also transitions to Done
+        session = session.apply(ReviewAction.RemoveOrMark)
+        assertEquals(1, session.index)
+        assertEquals(1, session.removed)
+        assertEquals(ReviewPhase.Done, session.phase)
+    }
+
+    @Test
+    fun suggestionsMode_backAction_resetsToPicker() {
+        val cards = listOf(
+            ReviewCard(createScreenshot(501L), "Near miss", originalScore = 0.40f)
+        )
+        var session = ReviewSession().apply(ReviewAction.StartSuggestions("col_sug", "Travel", cards))
+        assertEquals(ReviewMode.Suggestions("col_sug", "Travel"), session.mode)
+
+        session = session.apply(ReviewAction.Back)
+        assertEquals(ReviewMode.Picker, session.mode)
+        assertTrue(session.stack.isEmpty())
+        assertEquals(0, session.index)
+    }
 }

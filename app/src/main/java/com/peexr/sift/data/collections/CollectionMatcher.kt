@@ -3,10 +3,14 @@ package com.peexr.sift.data.collections
 import com.peexr.sift.data.search.dot
 import kotlin.math.sqrt
 
-enum class AutoFillSensitivity(val zThreshold: Float, val label: String) {
-    STRICT(2.0f, "Strict"),
-    BALANCED(1.5f, "Balanced"),
-    LOOSE(1.0f, "Loose")
+enum class AutoFillSensitivity(
+    val zThreshold: Float,
+    val label: String,
+    val classifierThreshold: Float = 0.5f
+) {
+    STRICT(2.0f, "Strict", 0.65f),
+    BALANCED(1.5f, "Balanced", 0.50f),
+    LOOSE(1.0f, "Loose", 0.35f)
 }
 
 /**

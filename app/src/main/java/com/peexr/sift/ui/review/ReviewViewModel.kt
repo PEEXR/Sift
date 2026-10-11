@@ -68,10 +68,14 @@ class ReviewViewModel(
     private fun triggerCollectionRefreshIfNeeded() {
         val session = _session.value
         val mode = session.mode
-        if (mode is ReviewMode.Collection && !collectionRefreshedForCurrentSession) {
+        val collectionId = when (mode) {
+            is ReviewMode.Collection -> mode.id
+            is ReviewMode.Suggestions -> mode.id
+            else -> null
+        }
+        if (collectionId != null && !collectionRefreshedForCurrentSession) {
             if (shouldRefreshAfterSession(session.kept, session.removed)) {
                 collectionRefreshedForCurrentSession = true
-                val collectionId = mode.id
                 appScope.launch {
                     try {
                         repository.refreshAutoCollections(onlyCollectionId = collectionId)
@@ -176,6 +180,44 @@ class ReviewViewModel(
                 throw e
             } catch (t: Throwable) {
                 Log.e("ReviewViewModel", "Failed to load review queue for $collectionId", t)
+            }
+        }
+    }
+
+    fun openSuggestions(collectionId: String) {
+        triggerCollectionRefreshIfNeeded()
+        collectionRefreshedForCurrentSession = false
+        searchJob?.cancel()
+        cleanupJob?.cancel()
+        viewModelScope.launch {
+            try {
+                val queue = repository.getSuggestions(collectionId)
+                val cards = queue.map { row ->
+                    ReviewCard(
+                        item = ScreenshotItem(
+                            id = row.screenshot.id,
+                            uri = row.screenshot.uri,
+                            displayName = row.screenshot.displayName,
+                            dateAdded = row.screenshot.dateAdded,
+                            sizeBytes = row.screenshot.sizeBytes,
+                            ocrText = row.screenshot.ocrText,
+                            visualLabels = row.screenshot.visualLabels.split(",").filter { it.isNotBlank() },
+                            isProcessed = row.screenshot.isProcessed,
+                            isJunk = row.screenshot.isJunk,
+                            junkConfidence = row.screenshot.junkConfidence,
+                            junkRationale = row.screenshot.junkRationale
+                        ),
+                        confidenceLabel = "Near miss",
+                        originalScore = row.membershipScore,
+                        isStrong = false
+                    )
+                }
+                val colName = _session.value.collections.firstOrNull { it.id == collectionId }?.name ?: "Collection"
+                dispatch(ReviewAction.StartSuggestions(id = collectionId, name = colName, cards = cards))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                Log.e("ReviewViewModel", "Failed to load suggestions for $collectionId", t)
             }
         }
     }
@@ -298,7 +340,7 @@ class ReviewViewModel(
         searchJob?.cancel()
         cleanupJob?.cancel()
         dispatch(ReviewAction.ClearSearch)
-        if (_session.value.mode is ReviewMode.Collection) {
+        if (_session.value.mode is ReviewMode.Collection || _session.value.mode is ReviewMode.Suggestions) {
             collectionRefreshedForCurrentSession = false
         }
     }
@@ -308,7 +350,18 @@ class ReviewViewModel(
         val current = session.currentCard ?: return
         val mode = session.mode
 
-        if (mode is ReviewMode.Collection) {
+        if (mode is ReviewMode.Suggestions) {
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    repository.keepInCollection(current.item.id, mode.id)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    Log.e("ReviewViewModel", "Failed to keep in collection", t)
+                }
+            }
+            showToast("Added to ${mode.name}")
+        } else if (mode is ReviewMode.Collection) {
             viewModelScope.launch(Dispatchers.IO) {
                 try {
                     repository.keepInCollection(current.item.id, mode.id)
@@ -333,7 +386,18 @@ class ReviewViewModel(
         val current = session.currentCard ?: return
         val mode = session.mode
 
-        if (mode is ReviewMode.Collection) {
+        if (mode is ReviewMode.Suggestions) {
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    repository.removeFromCollection(current.item.id, mode.id)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    Log.e("ReviewViewModel", "Failed to remove from collection", t)
+                }
+            }
+            showToast("Not in ${mode.name}")
+        } else if (mode is ReviewMode.Collection) {
             viewModelScope.launch(Dispatchers.IO) {
                 try {
                     repository.removeFromCollection(current.item.id, mode.id)
@@ -363,7 +427,20 @@ class ReviewViewModel(
         val lastStep = session.history.lastOrNull() ?: return
         val mode = session.mode
 
-        if (mode is ReviewMode.Collection) {
+        if (mode is ReviewMode.Suggestions) {
+            val card = lastStep.card
+            if (card != null) {
+                viewModelScope.launch(Dispatchers.IO) {
+                    try {
+                        repository.deleteMembership(card.item.id, mode.id)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (t: Throwable) {
+                        Log.e("ReviewViewModel", "Failed to undo suggestion membership", t)
+                    }
+                }
+            }
+        } else if (mode is ReviewMode.Collection) {
             val card = lastStep.card
             if (card != null) {
                 viewModelScope.launch(Dispatchers.IO) {
@@ -475,7 +552,7 @@ class ReviewViewModel(
     fun back() {
         triggerCollectionRefreshIfNeeded()
         dispatch(ReviewAction.Back)
-        if (_session.value.mode is ReviewMode.Collection) {
+        if (_session.value.mode is ReviewMode.Collection || _session.value.mode is ReviewMode.Suggestions) {
             collectionRefreshedForCurrentSession = false
         }
     }

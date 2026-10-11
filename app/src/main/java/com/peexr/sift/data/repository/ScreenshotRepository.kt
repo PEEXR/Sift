@@ -10,7 +10,11 @@ import android.provider.MediaStore
 import android.util.Log
 import com.peexr.sift.SiftApplication
 import com.peexr.sift.data.api.JevApiClient
+import com.peexr.sift.data.collections.AutoFillSensitivity
+import com.peexr.sift.data.collections.ClassifierModel
+import com.peexr.sift.data.collections.CollectionClassifier
 import com.peexr.sift.data.collections.CollectionMatcher
+import com.peexr.sift.data.collections.probability
 import com.peexr.sift.data.embedding.EmbeddingEngine
 import com.peexr.sift.data.embedding.ModelState
 import com.peexr.sift.data.embedding.ModelStore
@@ -77,6 +81,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
+const val SUGGEST_MIN_P = 0.15f
+
 class ScreenshotRepository(
     private val context: Context,
     private val database: AppDatabase,
@@ -84,7 +90,15 @@ class ScreenshotRepository(
     private val jevApiClient: JevApiClient,
     private val modelStoreProvider: () -> ModelStore? = { (context.applicationContext as? SiftApplication)?.modelStore },
     private val embeddingEngineProvider: () -> EmbeddingEngine? = { (context.applicationContext as? SiftApplication)?.embeddingEngine },
-    private val zThresholdProvider: () -> Float = { CollectionMatcher.DEFAULT_Z_THRESHOLD }
+    private val zThresholdProvider: () -> Float = { CollectionMatcher.DEFAULT_Z_THRESHOLD },
+    private val sensitivityProvider: () -> AutoFillSensitivity = {
+        (context.applicationContext as? SiftApplication)?.settingsManager?.autoFillSensitivity
+            ?: when {
+                zThresholdProvider() >= AutoFillSensitivity.STRICT.zThreshold - 0.01f -> AutoFillSensitivity.STRICT
+                zThresholdProvider() <= AutoFillSensitivity.LOOSE.zThreshold + 0.01f -> AutoFillSensitivity.LOOSE
+                else -> AutoFillSensitivity.BALANCED
+            }
+    }
 ) {
     private val dao = database.screenshotDao()
     private val contentResolver: ContentResolver = context.contentResolver
@@ -345,6 +359,98 @@ class ScreenshotRepository(
         Result.success(matchCount)
     }
 
+    private data class RefreshData(
+        val collections: List<CollectionEntity>,
+        val rawEmbeddings: List<com.peexr.sift.data.local.EmbeddingRow>,
+        val feedbackByCollection: Map<String, Pair<List<com.peexr.sift.data.local.EmbeddingRow>, List<com.peexr.sift.data.local.EmbeddingRow>>>,
+        val otherManualByCollection: Map<String, List<com.peexr.sift.data.local.EmbeddingRow>>
+    )
+
+    private data class TrainedClassifier(
+        val model: ClassifierModel,
+        val positiveCount: Int,
+        val negativeCount: Int,
+        val trainMs: Long
+    )
+
+    private data class SuggestionsDbData(
+        val excludedRows: List<com.peexr.sift.data.local.EmbeddingRow>,
+        val otherManualRows: List<com.peexr.sift.data.local.EmbeddingRow>,
+        val rawEmbeddings: List<com.peexr.sift.data.local.EmbeddingRow>,
+        val memberIds: Set<Long>
+    )
+
+    private fun buildAndTrainClassifier(
+        collectionId: String,
+        keptRows: List<com.peexr.sift.data.local.EmbeddingRow>,
+        excludedRows: List<com.peexr.sift.data.local.EmbeddingRow>,
+        otherManualRows: List<com.peexr.sift.data.local.EmbeddingRow>,
+        candidateIds: List<Long>,
+        candidateVectorMap: Map<Long, FloatArray>
+    ): TrainedClassifier? {
+        val manualIdsInC = keptRows.map { it.id }.toSet()
+        val excludedIdsInC = excludedRows.map { it.id }.toSet()
+
+        val positiveVectors = keptRows.mapNotNull { row ->
+            candidateVectorMap[row.id] ?: try {
+                val vec = row.embedding.toFloatArray()
+                if (vec.size == 128) vec else null
+            } catch (_: Exception) { null }
+        }
+
+        if (positiveVectors.size < CollectionClassifier.MIN_EXAMPLES) {
+            return null
+        }
+
+        val t0 = System.currentTimeMillis()
+        val otherManualValid = otherManualRows.filter { it.id !in manualIdsInC }
+
+        val backgroundCount = (5 * positiveVectors.size).coerceIn(50, 200)
+        val seed = collectionId.hashCode().toLong()
+        val excludeIds = manualIdsInC + excludedIdsInC
+        val sampledIds = CollectionClassifier.sampleBackground(candidateIds, excludeIds, backgroundCount, seed)
+
+        val negativeVectors = ArrayList<FloatArray>()
+        val negativeIds = mutableSetOf<Long>()
+
+        for (row in excludedRows) {
+            if (negativeIds.add(row.id)) {
+                val vec = candidateVectorMap[row.id] ?: try {
+                    val v = row.embedding.toFloatArray()
+                    if (v.size == 128) v else null
+                } catch (_: Exception) { null }
+                if (vec != null) negativeVectors.add(vec)
+            }
+        }
+
+        for (row in otherManualValid) {
+            if (negativeIds.add(row.id)) {
+                val vec = candidateVectorMap[row.id] ?: try {
+                    val v = row.embedding.toFloatArray()
+                    if (v.size == 128) v else null
+                } catch (_: Exception) { null }
+                if (vec != null) negativeVectors.add(vec)
+            }
+        }
+
+        for (id in sampledIds) {
+            if (negativeIds.add(id)) {
+                val vec = candidateVectorMap[id]
+                if (vec != null) negativeVectors.add(vec)
+            }
+        }
+
+        val model = CollectionClassifier.train(positives = positiveVectors, negatives = negativeVectors)
+        val trainMs = System.currentTimeMillis() - t0
+
+        return TrainedClassifier(
+            model = model,
+            positiveCount = positiveVectors.size,
+            negativeCount = negativeVectors.size,
+            trainMs = trainMs
+        )
+    }
+
     suspend fun refreshAutoCollections(onlyCollectionId: String? = null) {
         val modelStore = modelStoreProvider()
         val embeddingEngine = embeddingEngineProvider()
@@ -355,7 +461,7 @@ class ScreenshotRepository(
         }
 
         try {
-            val (targetCollections, rawEmbeddings, feedbackByCollection) = withContext(Dispatchers.IO) {
+            val refreshData = withContext(Dispatchers.IO) {
                 val collections = if (onlyCollectionId != null) {
                     val col = dao.getCollectionById(onlyCollectionId)
                     if (col != null && col.autoFill) listOf(col) else emptyList()
@@ -368,77 +474,167 @@ class ScreenshotRepository(
                     val excluded = dao.getFeedbackEmbeddings(col.id, MembershipSource.EXCLUDED)
                     col.id to Pair(kept, excluded)
                 }
-                Triple(collections, embeddings, feedback)
+                val otherManual = collections.associate { col ->
+                    val (kept, _) = feedback[col.id] ?: Pair(emptyList(), emptyList())
+                    if (kept.size >= CollectionClassifier.MIN_EXAMPLES) {
+                        col.id to dao.getOtherManualEmbeddings(col.id)
+                    } else {
+                        col.id to emptyList()
+                    }
+                }
+                RefreshData(collections, embeddings, feedback, otherManual)
             }
 
+            val targetCollections = refreshData.collections
             if (targetCollections.isEmpty()) {
                 return
             }
 
-            val backgroundVectors = CollectionMatcher.BACKGROUND_DESCRIPTIONS.map { desc ->
-                getOrEmbedText(embeddingEngine, desc)
+            val feedbackByCollection = refreshData.feedbackByCollection
+            val rawEmbeddings = refreshData.rawEmbeddings
+            val otherManualByCollection = refreshData.otherManualByCollection
+
+            val hasFallback = targetCollections.any { col ->
+                val (kept, _) = feedbackByCollection[col.id] ?: Pair(emptyList(), emptyList())
+                kept.size < CollectionClassifier.MIN_EXAMPLES
             }
 
-            val collectionVectors = targetCollections.map { col ->
-                val text = if (col.description.isNotBlank()) col.description else col.name
-                Pair(col, getOrEmbedText(embeddingEngine, text))
+            val backgroundVectors = if (hasFallback) {
+                CollectionMatcher.BACKGROUND_DESCRIPTIONS.map { desc ->
+                    getOrEmbedText(embeddingEngine, desc)
+                }
+            } else {
+                emptyList()
+            }
+
+            val collectionTextVectors = if (hasFallback) {
+                targetCollections.filter { col ->
+                    (feedbackByCollection[col.id]?.first?.size ?: 0) < CollectionClassifier.MIN_EXAMPLES
+                }.associate { col ->
+                    val text = if (col.description.isNotBlank()) col.description else col.name
+                    col.id to getOrEmbedText(embeddingEngine, text)
+                }
+            } else {
+                emptyMap()
             }
 
             val collectionMatches = withContext(Dispatchers.Default) {
-                val candidateScreenshots = rawEmbeddings.mapNotNull { row ->
+                val candidateScreenshots = ArrayList<Pair<Long, FloatArray>>(rawEmbeddings.size)
+                val candidateVectorMap = HashMap<Long, FloatArray>(rawEmbeddings.size)
+                for (row in rawEmbeddings) {
                     try {
                         val vec = row.embedding.toFloatArray()
-                        if (vec.size == 128) Pair(row.id, vec) else null
-                    } catch (_: Exception) {
-                        null
-                    }
+                        if (vec.size == 128) {
+                            candidateScreenshots.add(Pair(row.id, vec))
+                            candidateVectorMap[row.id] = vec
+                        }
+                    } catch (_: Exception) {}
                 }
+                val candidateIds = candidateScreenshots.map { it.first }
 
-                collectionVectors.map { (col, textVec) ->
+                targetCollections.map { col ->
                     val (keptRows, excludedRows) = feedbackByCollection[col.id] ?: Pair(emptyList(), emptyList())
-                    val keptVectors = keptRows.mapNotNull { row ->
-                        try {
-                            val vec = row.embedding.toFloatArray()
-                            if (vec.size == 128) vec else null
-                        } catch (_: Exception) {
-                            null
-                        }
-                    }
-                    val excludedVectors = excludedRows.mapNotNull { row ->
-                        try {
-                            val vec = row.embedding.toFloatArray()
-                            if (vec.size == 128) vec else null
-                        } catch (_: Exception) {
-                            null
-                        }
-                    }
+                    val manualIdsInC = keptRows.map { it.id }.toSet()
+                    val excludedIdsInC = excludedRows.map { it.id }.toSet()
+                    val otherManualRows = otherManualByCollection[col.id] ?: emptyList()
 
-                    val refinedVector = CollectionMatcher.refineQuery(
-                        base = textVec,
-                        positives = keptVectors,
-                        negatives = excludedVectors
+                    val trained = buildAndTrainClassifier(
+                        collectionId = col.id,
+                        keptRows = keptRows,
+                        excludedRows = excludedRows,
+                        otherManualRows = otherManualRows,
+                        candidateIds = candidateIds,
+                        candidateVectorMap = candidateVectorMap
                     )
 
-                    val matches = CollectionMatcher.match(
-                        collection = refinedVector,
-                        screenshots = candidateScreenshots,
-                        background = backgroundVectors,
-                        threshold = zThresholdProvider()
-                    )
-                    Pair(col.id, matches)
+                    if (trained != null) {
+                        // Classifier path
+                        val sensitivity = sensitivityProvider()
+                        val threshold = sensitivity.classifierThreshold
+
+                        val assignedRows = ArrayList<ScreenshotCollectionCrossRef>()
+                        for ((id, vec) in candidateScreenshots) {
+                            if (id !in manualIdsInC && id !in excludedIdsInC) {
+                                val p = trained.model.probability(vec)
+                                if (p >= threshold) {
+                                    assignedRows.add(
+                                        ScreenshotCollectionCrossRef(
+                                            screenshotId = id,
+                                            collectionId = col.id,
+                                            source = MembershipSource.AUTO,
+                                            score = p
+                                        )
+                                    )
+                                }
+                            }
+                        }
+
+                        try {
+                            Log.i(
+                                "Sift.Classifier",
+                                "Collection '${col.name}' (${col.id}): path=classifier, pos=${trained.positiveCount}, neg=${trained.negativeCount}, assigned=${assignedRows.size}, trainMs=${trained.trainMs}"
+                            )
+                        } catch (_: Throwable) {}
+                        Pair(col.id, assignedRows)
+                    } else {
+                        // Fallback path
+                        val t0 = System.currentTimeMillis()
+                        val keptVectors = keptRows.mapNotNull { row ->
+                            try {
+                                val vec = row.embedding.toFloatArray()
+                                if (vec.size == 128) vec else null
+                            } catch (_: Exception) { null }
+                        }
+                        val excludedVectors = excludedRows.mapNotNull { row ->
+                            try {
+                                val vec = row.embedding.toFloatArray()
+                                if (vec.size == 128) vec else null
+                            } catch (_: Exception) { null }
+                        }
+
+                        val textVec = collectionTextVectors[col.id] ?: getOrEmbedText(
+                            embeddingEngine,
+                            if (col.description.isNotBlank()) col.description else col.name
+                        )
+
+                        val refinedVector = CollectionMatcher.refineQuery(
+                            base = textVec,
+                            positives = keptVectors,
+                            negatives = excludedVectors
+                        )
+
+                        val matches = CollectionMatcher.match(
+                            collection = refinedVector,
+                            screenshots = candidateScreenshots,
+                            background = backgroundVectors,
+                            threshold = zThresholdProvider()
+                        )
+
+                        val assignedRows = matches.filter { (id, _) ->
+                            id !in manualIdsInC && id !in excludedIdsInC
+                        }.map { (id, z) ->
+                            ScreenshotCollectionCrossRef(
+                                screenshotId = id,
+                                collectionId = col.id,
+                                source = MembershipSource.AUTO,
+                                score = z
+                            )
+                        }
+                        val fallbackMs = System.currentTimeMillis() - t0
+
+                        try {
+                            Log.i(
+                                "Sift.Classifier",
+                                "Collection '${col.name}' (${col.id}): path=fallback, pos=${keptVectors.size}, neg=${excludedVectors.size}, assigned=${assignedRows.size}, trainMs=$fallbackMs"
+                            )
+                        } catch (_: Throwable) {}
+                        Pair(col.id, assignedRows)
+                    }
                 }
             }
 
             withContext(Dispatchers.IO) {
-                for ((colId, matches) in collectionMatches) {
-                    val rows = matches.map { (screenshotId, z) ->
-                        ScreenshotCollectionCrossRef(
-                            screenshotId = screenshotId,
-                            collectionId = colId,
-                            source = MembershipSource.AUTO,
-                            score = z
-                        )
-                    }
+                for ((colId, rows) in collectionMatches) {
                     dao.replaceAutoMembers(colId, rows)
                 }
             }
@@ -505,6 +701,84 @@ class ScreenshotRepository(
 
     suspend fun getReviewQueue(collectionId: String): List<CollectionMemberRow> = withContext(Dispatchers.IO) {
         dao.getReviewQueue(collectionId)
+    }
+
+    suspend fun deleteMembership(screenshotId: Long, collectionId: String) = withContext(Dispatchers.IO) {
+        dao.removeFromCollection(screenshotId, collectionId)
+    }
+
+    suspend fun getSuggestions(collectionId: String, limit: Int = 30): List<CollectionMemberRow> = withContext(Dispatchers.Default) {
+        if (limit <= 0) return@withContext emptyList()
+
+        val keptRows = withContext(Dispatchers.IO) {
+            dao.getFeedbackEmbeddings(collectionId, MembershipSource.MANUAL)
+        }
+        if (keptRows.size < CollectionClassifier.MIN_EXAMPLES) {
+            return@withContext emptyList()
+        }
+
+        val dbData = withContext(Dispatchers.IO) {
+            val excluded = dao.getFeedbackEmbeddings(collectionId, MembershipSource.EXCLUDED)
+            val otherManual = dao.getOtherManualEmbeddings(collectionId)
+            val embeddings = dao.getAllEmbeddings()
+            val members = dao.getMemberScreenshotIds(collectionId).toSet()
+            SuggestionsDbData(excluded, otherManual, embeddings, members)
+        }
+
+        val candidateScreenshots = ArrayList<Pair<Long, FloatArray>>(dbData.rawEmbeddings.size)
+        val candidateVectorMap = HashMap<Long, FloatArray>(dbData.rawEmbeddings.size)
+        for (row in dbData.rawEmbeddings) {
+            try {
+                val vec = row.embedding.toFloatArray()
+                if (vec.size == 128) {
+                    candidateScreenshots.add(Pair(row.id, vec))
+                    candidateVectorMap[row.id] = vec
+                }
+            } catch (_: Exception) {}
+        }
+        val candidateIds = candidateScreenshots.map { it.first }
+
+        val trained = buildAndTrainClassifier(
+            collectionId = collectionId,
+            keptRows = keptRows,
+            excludedRows = dbData.excludedRows,
+            otherManualRows = dbData.otherManualRows,
+            candidateIds = candidateIds,
+            candidateVectorMap = candidateVectorMap
+        ) ?: return@withContext emptyList()
+
+        val sensitivity = sensitivityProvider()
+        val threshold = sensitivity.classifierThreshold
+
+        val nearMisses = ArrayList<Pair<Long, Float>>()
+        for ((id, vec) in candidateScreenshots) {
+            if (id !in dbData.memberIds) {
+                val p = trained.model.probability(vec)
+                if (p >= SUGGEST_MIN_P && p < threshold) {
+                    nearMisses.add(Pair(id, p))
+                }
+            }
+        }
+
+        nearMisses.sortWith(compareByDescending<Pair<Long, Float>> { it.second }.thenBy { it.first })
+        val topMatches = nearMisses.take(limit)
+        if (topMatches.isEmpty()) return@withContext emptyList()
+
+        val topIds = topMatches.map { it.first }
+        val entities = withContext(Dispatchers.IO) {
+            dao.getScreenshotsByIds(topIds)
+        }
+        val entityMap = entities.associateBy { it.id }
+
+        topMatches.mapNotNull { (id, p) ->
+            entityMap[id]?.let { entity ->
+                CollectionMemberRow(
+                    screenshot = entity,
+                    membershipSource = MembershipSource.AUTO,
+                    membershipScore = p
+                )
+            }
+        }
     }
 
     suspend fun deleteCollection(id: String) = withContext(Dispatchers.IO) {

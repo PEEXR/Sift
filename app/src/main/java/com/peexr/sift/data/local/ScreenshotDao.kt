@@ -48,8 +48,22 @@ interface ScreenshotDao {
     @Query("SELECT id, uri FROM screenshots WHERE embedding IS NULL")
     suspend fun getScreenshotsNeedingEmbedding(): List<ScreenshotUriRow>
 
-    @Query("SELECT id, uri, isProcessed, (embedding IS NULL) AS needsEmbedding FROM screenshots WHERE isProcessed = 0 OR embedding IS NULL ORDER BY dateAdded DESC")
+    @Query("""
+        SELECT id, uri, isProcessed, (embedding IS NULL) AS needsEmbedding
+        FROM screenshots
+        WHERE isProcessed = 0 OR embedding IS NULL
+        ORDER BY (id IN (SELECT screenshotId FROM screenshot_collections WHERE source = 'MANUAL')) DESC, dateAdded DESC
+    """)
     suspend fun getScreenshotsNeedingIndexing(): List<IndexingRow>
+
+    @Query("""
+        SELECT id, uri, isProcessed, (embedding IS NULL) AS needsEmbedding
+        FROM screenshots
+        WHERE embedding IS NULL
+          AND id IN (SELECT screenshotId FROM screenshot_collections WHERE source = 'MANUAL')
+        ORDER BY dateAdded DESC
+    """)
+    suspend fun getManualScreenshotsNeedingEmbedding(): List<IndexingRow>
 
     @Query("SELECT * FROM screenshots WHERE id IN (:ids)")
     suspend fun getScreenshotsByIds(ids: List<Long>): List<ScreenshotEntity>
@@ -266,4 +280,22 @@ interface ScreenshotDao {
         isProcessed: Boolean,
         embedding: ByteArray?
     )
+
+    // Collection classifier queries
+    @Query("""
+        SELECT DISTINCT s.id AS id, s.embedding AS embedding
+        FROM screenshots s
+        INNER JOIN screenshot_collections sc ON sc.screenshotId = s.id
+        WHERE sc.collectionId != :excludeCollectionId AND sc.source = 'MANUAL' AND s.embedding IS NOT NULL
+    """)
+    suspend fun getOtherManualEmbeddings(excludeCollectionId: String): List<EmbeddingRow>
+
+    @Query("SELECT * FROM screenshots WHERE displayName IN (:names)")
+    suspend fun getScreenshotsByDisplayNames(names: List<String>): List<ScreenshotEntity>
+
+    @Query("SELECT COUNT(*) FROM screenshots WHERE embedding IS NOT NULL")
+    suspend fun countWithEmbedding(): Int
+
+    @Query("SELECT screenshotId FROM screenshot_collections WHERE collectionId = :collectionId")
+    suspend fun getMemberScreenshotIds(collectionId: String): List<Long>
 }

@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -74,6 +76,7 @@ fun CollectionDetailRoute(
     viewModel: CollectionDetailViewModel,
     onBack: () -> Unit,
     onReview: (String) -> Unit,
+    onFindMore: (String) -> Unit = {},
     onOpenScreenshot: (ScreenshotItem) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -94,6 +97,9 @@ fun CollectionDetailRoute(
         onBack = onBack,
         onReview = {
             uiState.collection?.id?.let { onReview(it) }
+        },
+        onFindMore = {
+            uiState.collection?.id?.let { onFindMore(it) }
         },
         onOpenScreenshot = onOpenScreenshot,
         onFilterSelected = viewModel::setFilter,
@@ -116,6 +122,7 @@ fun CollectionDetailScreen(
     uiState: CollectionDetailUiState,
     onBack: () -> Unit,
     onReview: () -> Unit,
+    onFindMore: () -> Unit = {},
     onOpenScreenshot: (ScreenshotItem) -> Unit,
     onFilterSelected: (MemberFilter) -> Unit,
     onUpdateDescription: (String) -> Unit,
@@ -224,6 +231,21 @@ fun CollectionDetailScreen(
                                 expanded = showMenu,
                                 onDismissRequest = { showMenu = false }
                             ) {
+                                if (uiState.keptCount >= 5) {
+                                    DropdownMenuItem(
+                                        text = { Text("Find more") },
+                                        onClick = {
+                                            showMenu = false
+                                            onFindMore()
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Default.Search,
+                                                contentDescription = null
+                                            )
+                                        }
+                                    )
+                                }
                                 DropdownMenuItem(
                                     text = { Text("Edit description") },
                                     onClick = {
@@ -372,6 +394,64 @@ fun CollectionDetailScreen(
                                             imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                                             contentDescription = "Review unsure screenshots",
                                             modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // "Find more" button when collection has >= 5 examples
+                    if (uiState.keptCount >= 5) {
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            contentColor = SiftTheme.extended.displayInk,
+                            border = BorderStroke(1.5.dp, pageInk.copy(alpha = 0.35f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp)
+                                .clip(CircleShape)
+                                .clickable(
+                                    role = Role.Button,
+                                    onClickLabel = "Find more screenshots for ${collection.name}",
+                                    onClick = onFindMore
+                                )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 20.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Search,
+                                        contentDescription = null,
+                                        tint = pageInk,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Text(
+                                        text = "Find more",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = pageInk
+                                    )
+                                }
+                                Surface(
+                                    shape = CircleShape,
+                                    color = pageInk.copy(alpha = 0.12f),
+                                    contentColor = pageInk,
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp)
                                         )
                                     }
                                 }

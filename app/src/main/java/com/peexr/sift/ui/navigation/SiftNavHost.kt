@@ -66,6 +66,7 @@ fun SiftMainApp(
     var showSettingsScreen by remember { mutableStateOf(false) }
     var openCollectionId by remember { mutableStateOf<String?>(null) }
     var reviewCollectionId by remember { mutableStateOf<String?>(null) }
+    var reviewSuggestionsCollectionId by remember { mutableStateOf<String?>(null) }
     var viewerScreenshotId by remember { mutableStateOf<Long?>(null) }
 
     val destinations = listOf(
@@ -108,7 +109,9 @@ fun SiftMainApp(
                         ReviewRoute(
                             viewModel = reviewViewModel,
                             initialCollectionId = reviewCollectionId,
+                            initialSuggestionsCollectionId = reviewSuggestionsCollectionId,
                             onConsumedCollectionId = { reviewCollectionId = null },
+                            onConsumedSuggestionsCollectionId = { reviewSuggestionsCollectionId = null },
                             onOpenScreenshot = { item -> viewerScreenshotId = item.id },
                             onNavigateToCollections = { currentDestination = SiftDestination.Collections }
                         )
@@ -139,6 +142,11 @@ fun SiftMainApp(
                             openCollectionId = null
                             currentDestination = SiftDestination.Review
                         },
+                        onFindMore = { findMoreId ->
+                            reviewSuggestionsCollectionId = findMoreId
+                            openCollectionId = null
+                            currentDestination = SiftDestination.Review
+                        },
                         onOpenScreenshot = { item ->
                             viewerScreenshotId = item.id
                         }
@@ -154,9 +162,11 @@ fun SiftMainApp(
                 modifier = Modifier.fillMaxSize()
             ) {
                 viewerScreenshotId?.let { id ->
+                    val context = LocalContext.current
+                    val app = context.applicationContext as SiftApplication
                     val viewerViewModel: ViewerViewModel = viewModel(
                         key = "viewer-$id",
-                        factory = ViewerViewModel.Factory(repository, id)
+                        factory = ViewerViewModel.Factory(repository, id, app.appScope)
                     )
                     BackHandler {
                         viewerScreenshotId = null

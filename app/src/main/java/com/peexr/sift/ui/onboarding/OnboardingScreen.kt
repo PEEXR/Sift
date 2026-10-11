@@ -80,10 +80,19 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.material3.OutlinedTextField
+import android.util.Log
 import com.peexr.sift.SiftApplication
 import com.peexr.sift.data.embedding.ModelState
+import com.peexr.sift.ui.collections.ExamplePickerScreen
+import com.peexr.sift.ui.collections.nextCollectionColorHex
 import com.peexr.sift.ui.theme.CollectionPalette
 import com.peexr.sift.ui.theme.SiftTheme
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 /**
  * State-holding root for the first-run onboarding experience.
@@ -174,6 +183,38 @@ fun OnboardingScreen(
     val modelState by app.modelStore.state.collectAsState()
     val isModelInstalled = remember(modelState) { app.modelStore.isInstalled() }
 
+    var firstCollectionName by remember { mutableStateOf("") }
+    var firstCollectionDescription by remember { mutableStateOf("") }
+
+    fun persistFirstCollection(
+        name: String,
+        description: String,
+        exampleIds: List<Long>
+    ) {
+        app.appScope.launch {
+            try {
+                val count = app.repository.allCollectionsFlow.first().size
+                val colorHex = nextCollectionColorHex(count)
+                val desc = description.trim().ifBlank { name.trim() }
+                val colId = app.repository.createCollection(
+                    name = name.trim(),
+                    description = desc,
+                    colorHex = colorHex
+                )
+                for (id in exampleIds) {
+                    app.repository.addToCollection(id, colId)
+                }
+                if (exampleIds.isNotEmpty()) {
+                    app.repository.refreshAutoCollections(onlyCollectionId = colId)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                Log.e("OnboardingScreen", "Failed to persist first collection", t)
+            }
+        }
+    }
+
     BackHandler(enabled = currentStep != OnboardingStep.WELCOME) {
         previousStep(currentStep)?.let { currentStep = it }
     }
@@ -183,33 +224,35 @@ fun OnboardingScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // Top app bar with back navigation & 4-dot step indicator
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            if (currentStep != OnboardingStep.WELCOME) {
-                IconButton(
-                    onClick = { previousStep(currentStep)?.let { currentStep = it } },
-                    modifier = Modifier.size(48.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Previous step",
-                        tint = MaterialTheme.colorScheme.onSurface
-                    )
+        // Top app bar with back navigation & step indicator (hidden on EXAMPLES step which provides its own top bar)
+        if (currentStep != OnboardingStep.EXAMPLES) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                if (currentStep != OnboardingStep.WELCOME) {
+                    IconButton(
+                        onClick = { previousStep(currentStep)?.let { currentStep = it } },
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Previous step",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                } else {
+                    Spacer(modifier = Modifier.size(48.dp))
                 }
-            } else {
+
+                OnboardingStepIndicator(currentStep = currentStep)
+
                 Spacer(modifier = Modifier.size(48.dp))
             }
-
-            OnboardingStepIndicator(currentStep = currentStep)
-
-            Spacer(modifier = Modifier.size(48.dp))
         }
 
         // Animated step content with slide/fade transition
@@ -280,10 +323,50 @@ fun OnboardingScreen(
                         }
                     )
                 }
+                OnboardingStep.COLLECTION -> {
+                    CollectionStepContent(
+                        initialName = firstCollectionName,
+                        initialDescription = firstCollectionDescription,
+                        onContinue = { name, description ->
+                            firstCollectionName = name
+                            firstCollectionDescription = description
+                            nextStep(OnboardingStep.COLLECTION)?.let { currentStep = it }
+                        }
+                    )
+                }
+                OnboardingStep.EXAMPLES -> {
+                    ExamplePickerScreen(
+                        collectionName = firstCollectionName,
+                        repository = app.repository,
+                        onDone = { selectedIds ->
+                            persistFirstCollection(
+                                name = firstCollectionName,
+                                description = firstCollectionDescription,
+                                exampleIds = selectedIds
+                            )
+                            nextStep(OnboardingStep.EXAMPLES)?.let { currentStep = it }
+                        },
+                        onSkip = {
+                            persistFirstCollection(
+                                name = firstCollectionName,
+                                description = firstCollectionDescription,
+                                exampleIds = emptyList()
+                            )
+                            nextStep(OnboardingStep.EXAMPLES)?.let { currentStep = it }
+                        },
+                        onBack = {
+                            previousStep(OnboardingStep.EXAMPLES)?.let { currentStep = it }
+                        },
+                        stepIndicator = {
+                            OnboardingStepIndicator(currentStep = OnboardingStep.EXAMPLES)
+                        }
+                    )
+                }
                 OnboardingStep.READY -> {
                     ReadyStepContent(
-                        onCreateCollection = { onFinish(true) },
-                        onMaybeLater = { onFinish(false) }
+                        collectionName = firstCollectionName,
+                        modelState = modelState,
+                        onFinish = { onFinish(false) }
                     )
                 }
             }
@@ -849,7 +932,7 @@ fun ModelStepContent(
                                     color = SiftTheme.extended.displayInk
                                 )
                                 Text(
-                                    text = "Downloading AI weights · please keep Sift open",
+                                    text = "Downloading AI weights in background · you can continue",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -969,15 +1052,20 @@ fun ModelStepContent(
                     }
                 }
                 modelState is ModelState.Downloading -> {
-                    TextButton(
+                    Button(
                         onClick = onNext,
                         shape = CircleShape,
-                        modifier = Modifier.height(48.dp)
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
                     ) {
                         Text(
-                            text = "Skip for now",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary
+                            text = "Continue",
+                            style = MaterialTheme.typography.titleMedium
                         )
                     }
                 }
@@ -1055,18 +1143,158 @@ fun ModelStepContent(
 }
 
 /**
- * Step 4: Completion screen inviting user to create their first collection or proceed to Library.
+ * Step 4: First collection creation screen with name input, optional description,
+ * and quick suggestion chips.
+ */
+@Composable
+fun CollectionStepContent(
+    initialName: String,
+    initialDescription: String,
+    onContinue: (name: String, description: String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var name by remember { mutableStateOf(initialName) }
+    var description by remember { mutableStateOf(initialDescription) }
+    val suggestions = listOf("Tweets", "Chats", "Memes", "Study notes")
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 24.dp)
+            .navigationBarsPadding()
+            .imePadding(),
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f, fill = false)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(20.dp)
+        ) {
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Make your first collection",
+                    style = MaterialTheme.typography.displayMedium.copy(
+                        fontSize = 42.sp,
+                        lineHeight = 40.sp,
+                        letterSpacing = (-1.8).sp
+                    ),
+                    color = SiftTheme.extended.displayInk
+                )
+                Text(
+                    text = "Choose a name to get started. You'll pick a few examples next.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // 3-4 tappable suggestion chips
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Suggestions",
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    suggestions.forEach { suggestion ->
+                        val isSelected = name == suggestion
+                        Surface(
+                            shape = CircleShape,
+                            color = if (isSelected) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerHigh
+                            },
+                            contentColor = if (isSelected) {
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
+                            modifier = Modifier.clickable {
+                                name = suggestion
+                            }
+                        ) {
+                            Text(
+                                text = suggestion,
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Input fields
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Name") },
+                    placeholder = { Text("e.g. Memes, Tweets") },
+                    singleLine = true,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = description,
+                    onValueChange = { description = it },
+                    label = { Text("Description (optional)") },
+                    placeholder = { Text("What screenshots belong in this collection?") },
+                    maxLines = 3,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp, top = 16.dp)
+        ) {
+            Button(
+                onClick = { onContinue(name.trim(), description.trim()) },
+                enabled = name.isNotBlank(),
+                shape = CircleShape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+            ) {
+                Text(
+                    text = "Continue",
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Step 6: Completion screen mentioning the newly created collection and background indexing.
  */
 @Composable
 fun ReadyStepContent(
-    onCreateCollection: () -> Unit,
-    onMaybeLater: () -> Unit,
+    collectionName: String,
+    modelState: ModelState,
+    onFinish: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val sampleCollection = CollectionPalette.firstOrNull() ?: Pair(
         MaterialTheme.colorScheme.primaryContainer,
         MaterialTheme.colorScheme.onPrimaryContainer
     )
+    val displayName = collectionName.ifBlank { "Your first collection" }
 
     Column(
         modifier = modifier
@@ -1086,7 +1314,7 @@ fun ReadyStepContent(
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "You're set",
+                    text = "You're all set",
                     style = MaterialTheme.typography.displayMedium.copy(
                         fontSize = 46.sp,
                         lineHeight = 44.sp,
@@ -1095,7 +1323,7 @@ fun ReadyStepContent(
                     color = SiftTheme.extended.displayInk
                 )
                 Text(
-                    text = "Next, make your first collection \u2014 describe it in words and Sift fills it.",
+                    text = "Sift is set up. Your “$displayName” collection will fill automatically as screenshots are indexed.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1117,12 +1345,12 @@ fun ReadyStepContent(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "Memes",
+                        text = displayName,
                         style = MaterialTheme.typography.headlineMedium,
                         color = sampleCollection.second
                     )
                     Text(
-                        text = "\u201Cfunny memes and reaction images\u201D",
+                        text = "Sift will fill “$displayName” once screenshots are indexed.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = sampleCollection.second.copy(alpha = 0.85f)
                     )
@@ -1139,17 +1367,75 @@ fun ReadyStepContent(
                     }
                 }
             }
+
+            // Download progress if model is still downloading
+            if (modelState is ModelState.Downloading) {
+                val downloading = modelState
+                val total = downloading.bytesTotal.coerceAtLeast(1L)
+                val pct = ((downloading.bytesDone.toFloat() / total.toFloat()) * 100).toInt().coerceIn(0, 100)
+                val fraction = (downloading.bytesDone.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+
+                Card(
+                    shape = MaterialTheme.shapes.large,
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Sync,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = "Smart search model downloading… $pct%",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = SiftTheme.extended.displayInk
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.outlineVariant)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(fraction)
+                                    .fillMaxHeight()
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary)
+                            )
+                        }
+                        Text(
+                            text = "Indexing begins once download completes in the background.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
         }
 
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 16.dp, top = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(bottom = 16.dp, top = 16.dp)
         ) {
             Button(
-                onClick = onCreateCollection,
+                onClick = onFinish,
                 shape = CircleShape,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
@@ -1160,20 +1446,8 @@ fun ReadyStepContent(
                     .height(52.dp)
             ) {
                 Text(
-                    text = "Create a collection",
+                    text = "Go to Library",
                     style = MaterialTheme.typography.titleMedium
-                )
-            }
-
-            TextButton(
-                onClick = onMaybeLater,
-                shape = CircleShape,
-                modifier = Modifier.height(48.dp)
-            ) {
-                Text(
-                    text = "Maybe later",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }

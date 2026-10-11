@@ -99,7 +99,9 @@ import com.peexr.sift.ui.theme.SiftTheme
 fun ReviewRoute(
     viewModel: ReviewViewModel,
     initialCollectionId: String? = null,
+    initialSuggestionsCollectionId: String? = null,
     onConsumedCollectionId: () -> Unit = {},
+    onConsumedSuggestionsCollectionId: () -> Unit = {},
     onOpenScreenshot: (ScreenshotItem) -> Unit,
     onNavigateToCollections: () -> Unit,
     modifier: Modifier = Modifier
@@ -111,6 +113,13 @@ fun ReviewRoute(
         if (initialCollectionId != null) {
             viewModel.openCollection(initialCollectionId)
             onConsumedCollectionId()
+        }
+    }
+
+    LaunchedEffect(initialSuggestionsCollectionId) {
+        if (initialSuggestionsCollectionId != null) {
+            viewModel.openSuggestions(initialSuggestionsCollectionId)
+            onConsumedSuggestionsCollectionId()
         }
     }
 
@@ -267,7 +276,7 @@ fun ReviewScreen(
                         )
                     }
 
-                    is ReviewMode.Collection, is ReviewMode.Search, is ReviewMode.Cleanup -> {
+                    is ReviewMode.Collection, is ReviewMode.Suggestions, is ReviewMode.Search, is ReviewMode.Cleanup -> {
                         Box(
                             modifier = Modifier
                                 .weight(1f)
@@ -281,9 +290,10 @@ fun ReviewScreen(
                                 }
 
                                 is ReviewPhase.Empty -> {
-                                    val emptyMessage = when (uiState.mode) {
+                                    val emptyMessage = when (val mode = uiState.mode) {
                                         is ReviewMode.Search -> "No matches. Try different words."
                                         is ReviewMode.Cleanup -> "Nothing to clean here"
+                                        is ReviewMode.Suggestions -> "No more suggestions for ${mode.name} right now"
                                         else -> "All caught up in this collection!"
                                     }
                                     ReviewEmptyCard(
@@ -374,7 +384,11 @@ fun ReviewScreen(
                                 }
 
                                 is ReviewPhase.Done -> {
-                                    val colName = (uiState.mode as? ReviewMode.Collection)?.name ?: "Collection"
+                                    val colName = when (val mode = uiState.mode) {
+                                        is ReviewMode.Collection -> mode.name
+                                        is ReviewMode.Suggestions -> mode.name
+                                        else -> "Collection"
+                                    }
                                     CollectionDoneCard(
                                         collectionName = colName,
                                         kept = uiState.kept,
@@ -565,6 +579,7 @@ private fun ReviewHeaderBlock(
         // Progress bar and context label (shown only in Collection or Search modes with active stack)
         if (mode !is ReviewMode.Picker && total > 0) {
             val contextLabel = when (mode) {
+                is ReviewMode.Suggestions -> "${mode.name} \u00B7 suggestions"
                 is ReviewMode.Collection -> "${mode.name} \u00B7 least sure first"
                 is ReviewMode.Search -> "$total matches for \u201C${mode.query}\u201D \u00B7 least sure first"
                 is ReviewMode.Cleanup -> when (mode.preset) {
@@ -650,7 +665,16 @@ private fun ReviewBottomControlRow(
     modifier: Modifier = Modifier
 ) {
     val isSearch = mode is ReviewMode.Search || mode is ReviewMode.Cleanup
-    val leftAriaLabel = if (isSearch) "Mark for deletion" else "Remove from collection"
+    val leftAriaLabel = when (mode) {
+        is ReviewMode.Suggestions -> "Not in ${mode.name}"
+        is ReviewMode.Collection -> "Remove from collection"
+        is ReviewMode.Search, is ReviewMode.Cleanup -> "Mark for deletion"
+        else -> "Remove"
+    }
+    val rightAriaLabel = when (mode) {
+        is ReviewMode.Suggestions -> "Added to ${mode.name}"
+        else -> "Keep"
+    }
 
     Row(
         modifier = modifier,
@@ -726,14 +750,14 @@ private fun ReviewBottomControlRow(
                 .clip(CircleShape)
                 .clickable(
                     role = Role.Button,
-                    onClickLabel = "Keep",
+                    onClickLabel = rightAriaLabel,
                     onClick = onRightClick
                 )
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     imageVector = Icons.Rounded.Check,
-                    contentDescription = "Keep",
+                    contentDescription = rightAriaLabel,
                     modifier = Modifier.size(38.dp)
                 )
             }

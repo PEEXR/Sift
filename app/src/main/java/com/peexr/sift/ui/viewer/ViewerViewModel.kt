@@ -12,11 +12,17 @@ import com.peexr.sift.data.model.ScreenshotDetail
 import com.peexr.sift.data.repository.ScreenshotRepository
 import com.peexr.sift.ui.collections.nextCollectionColorHex
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Representation of a collection row in the viewer's collections sheet.
@@ -56,8 +62,13 @@ fun buildViewerCollections(
 
 class ViewerViewModel(
     private val repository: ScreenshotRepository,
-    val screenshotId: Long
+    val screenshotId: Long,
+    private val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 ) : ViewModel() {
+
+    companion object {
+        private val refreshJobs = ConcurrentHashMap<String, Job>()
+    }
 
     private var hadDetail = false
     private var hasEmitted = false
@@ -83,10 +94,27 @@ class ViewerViewModel(
         initialValue = ViewerUiState()
     )
 
+    private fun scheduleRefresh(collectionId: String) {
+        refreshJobs[collectionId]?.cancel()
+        refreshJobs[collectionId] = appScope.launch {
+            try {
+                delay(1500)
+                repository.refreshAutoCollections(onlyCollectionId = collectionId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                Log.e("ViewerViewModel", "Failed to refresh auto collection $collectionId after membership change", t)
+            } finally {
+                refreshJobs.remove(collectionId, coroutineContext[Job])
+            }
+        }
+    }
+
     fun toggleCollection(collectionId: String, member: Boolean) {
         viewModelScope.launch {
             try {
                 repository.setMembership(screenshotId, collectionId, member)
+                scheduleRefresh(collectionId)
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
@@ -111,6 +139,7 @@ class ViewerViewModel(
                     colorHex = colorHex
                 )
                 repository.setMembership(screenshotId, newId, member = true)
+                scheduleRefresh(newId)
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
@@ -138,11 +167,13 @@ class ViewerViewModel(
 
     class Factory(
         private val repository: ScreenshotRepository,
-        private val screenshotId: Long
+        private val screenshotId: Long,
+        private val appScope: CoroutineScope? = null
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return ViewerViewModel(repository, screenshotId) as T
+            val scope = appScope ?: CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            return ViewerViewModel(repository, screenshotId, scope) as T
         }
     }
 }

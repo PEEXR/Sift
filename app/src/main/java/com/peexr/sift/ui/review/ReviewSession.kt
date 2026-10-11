@@ -88,6 +88,7 @@ sealed interface ReviewMode {
     data class Collection(val id: String, val name: String) : ReviewMode
     data class Search(val query: String) : ReviewMode
     data class Cleanup(val preset: CleanupPreset) : ReviewMode
+    data class Suggestions(val id: String, val name: String) : ReviewMode
 }
 
 /**
@@ -125,6 +126,7 @@ data class ReviewStep(
 sealed interface ReviewAction {
     data class SetCollections(val collections: List<CollectionSummary>) : ReviewAction
     data class StartCollection(val id: String, val name: String, val cards: List<ReviewCard>) : ReviewAction
+    data class StartSuggestions(val id: String, val name: String, val cards: List<ReviewCard>) : ReviewAction
     data class StartSearch(val query: String, val searchStack: SearchStack) : ReviewAction
     data class StartCleanup(val preset: CleanupPreset, val cards: List<ReviewCard>) : ReviewAction
     data class SetQuery(val query: String) : ReviewAction
@@ -188,6 +190,21 @@ fun ReviewSession.apply(action: ReviewAction): ReviewSession {
         is ReviewAction.StartCollection -> {
             copy(
                 mode = ReviewMode.Collection(id = action.id, name = action.name),
+                stack = action.cards,
+                index = 0,
+                kept = 0,
+                removed = 0,
+                deleted = 0,
+                marked = emptySet(),
+                history = emptyList(),
+                previousCollection = null,
+                phase = if (action.cards.isEmpty()) ReviewPhase.Empty else ReviewPhase.Swiping
+            )
+        }
+
+        is ReviewAction.StartSuggestions -> {
+            copy(
+                mode = ReviewMode.Suggestions(id = action.id, name = action.name),
                 stack = action.cards,
                 index = 0,
                 kept = 0,
@@ -407,7 +424,7 @@ fun ReviewSession.apply(action: ReviewAction): ReviewSession {
                         phase = ReviewPhase.Swiping
                     )
                 }
-            } else if (mode is ReviewMode.Collection) {
+            } else if (mode is ReviewMode.Collection || mode is ReviewMode.Suggestions) {
                 copy(
                     mode = ReviewMode.Picker,
                     stack = emptyList(),

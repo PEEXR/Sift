@@ -69,6 +69,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.peexr.sift.data.model.CollectionSummary
+import com.peexr.sift.data.repository.ScreenshotRepository
 import com.peexr.sift.ui.navigation.FloatingNavClearance
 import com.peexr.sift.ui.theme.SiftTheme
 import com.peexr.sift.ui.theme.collectionColors
@@ -93,6 +94,8 @@ fun CollectionsRoute(
         onDismissStatus = viewModel::clearStatusMessage,
         openCreateSheetOnInit = openCreateSheetOnInit,
         onConsumedCreateSheet = onConsumedCreateSheet,
+        repository = viewModel.repository,
+        onCreateWithExamples = viewModel::createCollectionWithExamples,
         modifier = modifier
     )
 }
@@ -110,12 +113,40 @@ fun CollectionsListScreen(
     onDismissStatus: () -> Unit,
     openCreateSheetOnInit: Boolean = false,
     onConsumedCreateSheet: () -> Unit = {},
+    repository: ScreenshotRepository? = null,
+    onCreateWithExamples: ((name: String, description: String, exampleIds: List<Long>, onCreated: (String) -> Unit) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     var showCreateSheet by remember { mutableStateOf(openCreateSheetOnInit) }
     var newCollectionName by remember { mutableStateOf("") }
     var newCollectionDescription by remember { mutableStateOf("") }
+    var pendingCreation by remember { mutableStateOf<Pair<String, String>?>(null) }
+
+    if (pendingCreation != null && repository != null && onCreateWithExamples != null) {
+        val (name, description) = pendingCreation!!
+        ExamplePickerScreen(
+            collectionName = name,
+            repository = repository,
+            onDone = { selectedIds ->
+                onCreateWithExamples(name, description, selectedIds) { id ->
+                    pendingCreation = null
+                    onOpenCollection(id)
+                }
+            },
+            onSkip = {
+                onCreateWithExamples(name, description, emptyList()) { id ->
+                    pendingCreation = null
+                    onOpenCollection(id)
+                }
+            },
+            onBack = {
+                pendingCreation = null
+            },
+            modifier = modifier
+        )
+        return
+    }
 
     LaunchedEffect(openCreateSheetOnInit) {
         if (openCreateSheetOnInit) {
@@ -344,10 +375,16 @@ fun CollectionsListScreen(
                 )
                 Button(
                     onClick = {
-                        onCreate(newCollectionName.trim(), newCollectionDescription.trim())
+                        val name = newCollectionName.trim()
+                        val desc = newCollectionDescription.trim()
                         showCreateSheet = false
                         newCollectionName = ""
                         newCollectionDescription = ""
+                        if (repository != null && onCreateWithExamples != null) {
+                            pendingCreation = Pair(name, desc)
+                        } else {
+                            onCreate(name, desc)
+                        }
                     },
                     enabled = newCollectionName.isNotBlank(),
                     shape = CircleShape,
@@ -360,7 +397,7 @@ fun CollectionsListScreen(
                         .height(52.dp)
                 ) {
                     Text(
-                        text = "Create",
+                        text = if (repository != null && onCreateWithExamples != null) "Pick examples" else "Create",
                         style = MaterialTheme.typography.titleMedium
                     )
                 }

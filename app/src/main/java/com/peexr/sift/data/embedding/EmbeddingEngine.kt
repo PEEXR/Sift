@@ -7,9 +7,16 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.Log
 import com.peexr.sift.data.search.l2Normalize
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -67,7 +74,9 @@ class EmbeddingEngine(
         GemmaTokenizer.getInstance(tokenizerFile)
     },
     val maxSoftTokens: Int = ImagePatchifier.DEFAULT_MAX_SOFT_TOKENS,
-    private val useAcceleratedProviders: Boolean = false
+    private val useAcceleratedProviders: Boolean = false,
+    private val idleReleaseMs: Long = IDLE_RELEASE_MS,
+    private val engineScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 ) : AutoCloseable {
 
     init {
@@ -77,6 +86,8 @@ class EmbeddingEngine(
     }
 
     companion object {
+        private const val TAG = "EmbeddingEngine"
+        const val IDLE_RELEASE_MS = 60_000L
         const val EMBEDDING_DIM = 128
         const val TEXT_MODEL_FILE = "onnx/model_q4.onnx"
         const val VISION_MODEL_FILE = "onnx/vision_encoder_q4.onnx"
@@ -108,6 +119,29 @@ class EmbeddingEngine(
     @Volatile
     private var isClosed: Boolean = false
 
+    private val idleTimer = IdleReleaseTimer(
+        timeoutMs = idleReleaseMs,
+        scope = engineScope,
+        mutex = inferenceMutex,
+        onRelease = {
+            if (!isClosed) {
+                releaseIdleResources()
+            }
+        }
+    )
+
+    internal fun isTextSessionLoaded(): Boolean = textSession != null
+    internal fun isVisionSessionLoaded(): Boolean = visionSession != null
+    internal fun isTokenizerLoaded(): Boolean = tokenizer != null
+
+    private fun logSessionEvent(message: String) {
+        try {
+            Log.i(TAG, message)
+        } catch (_: Throwable) {
+            // Ignored in JVM unit test environments where android.util.Log is unmocked
+        }
+    }
+
     /**
      * Verifies that the model files are present and ready for inference.
      *
@@ -127,7 +161,10 @@ class EmbeddingEngine(
     private suspend fun getTokenizer(): GemmaTokenizer {
         tokenizer?.let { return it }
         return tokenizerMutex.withLock {
-            tokenizer ?: withContext(Dispatchers.IO) { tokenizerProvider() }.also { tokenizer = it }
+            tokenizer ?: withContext(Dispatchers.IO) { tokenizerProvider() }.also {
+                tokenizer = it
+                logSessionEvent("Loaded tokenizer")
+            }
         }
     }
 
@@ -178,43 +215,143 @@ class EmbeddingEngine(
     }
 
     /**
-     * Lazily loads and caches OrtEnvironment and both OrtSession instances on [Dispatchers.IO].
+     * Lazily retrieves or creates the shared [OrtEnvironment] singleton.
      */
-    private suspend fun getSessions(): Triple<OrtEnvironment, OrtSession, OrtSession> = withContext(Dispatchers.IO) {
+    private fun getOrCreateEnv(): OrtEnvironment {
+        ortEnv?.let { return it }
+        return synchronized(this@EmbeddingEngine) {
+            ensureModelReady()
+            ortEnv ?: OrtEnvironment.getEnvironment().also { ortEnv = it }
+        }
+    }
+
+    /**
+     * Lazily loads and caches OrtEnvironment and the text OrtSession on [Dispatchers.IO].
+     */
+    private suspend fun getTextSession(): Pair<OrtEnvironment, OrtSession> = withContext(Dispatchers.IO) {
         ensureModelReady()
 
-        var env = ortEnv
-        var ts = textSession
-        var vs = visionSession
-
-        if (env != null && ts != null && vs != null) {
-            return@withContext Triple(env, ts, vs)
+        val env = getOrCreateEnv()
+        val currentTs = textSession
+        if (currentTs != null) {
+            return@withContext Pair(env, currentTs)
         }
 
         synchronized(this@EmbeddingEngine) {
-            env = ortEnv
-            ts = textSession
-            vs = visionSession
-
-            if (env != null && ts != null && vs != null) {
-                return@withContext Triple(env!!, ts!!, vs!!)
-            }
+            ensureModelReady()
+            textSession?.let { return@withContext Pair(env, it) }
 
             val textModelFile = File(modelStore.getModelDir(), TEXT_MODEL_FILE)
-            val visionModelFile = File(modelStore.getModelDir(), VISION_MODEL_FILE)
-
             check(textModelFile.exists()) {
                 "Text model file not found at ${textModelFile.absolutePath}"
             }
+
+            val session = createSession(env, textModelFile.absolutePath)
+            textSession = session
+            logSessionEvent("Loaded text session")
+            Pair(env, session)
+        }
+    }
+
+    /**
+     * Lazily loads and caches OrtEnvironment and the vision OrtSession on [Dispatchers.IO].
+     */
+    private suspend fun getVisionSession(): Pair<OrtEnvironment, OrtSession> = withContext(Dispatchers.IO) {
+        ensureModelReady()
+
+        val env = getOrCreateEnv()
+        val currentVs = visionSession
+        if (currentVs != null) {
+            return@withContext Pair(env, currentVs)
+        }
+
+        synchronized(this@EmbeddingEngine) {
+            ensureModelReady()
+            visionSession?.let { return@withContext Pair(env, it) }
+
+            val visionModelFile = File(modelStore.getModelDir(), VISION_MODEL_FILE)
             check(visionModelFile.exists()) {
                 "Vision model file not found at ${visionModelFile.absolutePath}"
             }
 
-            val activeEnv = env ?: OrtEnvironment.getEnvironment().also { ortEnv = it }
-            val activeTs = ts ?: createSession(activeEnv, textModelFile.absolutePath).also { textSession = it }
-            val activeVs = vs ?: createSession(activeEnv, visionModelFile.absolutePath).also { visionSession = it }
+            val session = createSession(env, visionModelFile.absolutePath)
+            visionSession = session
+            logSessionEvent("Loaded vision session")
+            Pair(env, session)
+        }
+    }
 
-            Triple(activeEnv, activeTs, activeVs)
+    /**
+     * Lazily loads and returns OrtEnvironment and both OrtSession instances on [Dispatchers.IO].
+     */
+    internal suspend fun getSessions(): Triple<OrtEnvironment, OrtSession, OrtSession> {
+        val (env, ts) = getTextSession()
+        val (_, vs) = getVisionSession()
+        return Triple(env, ts, vs)
+    }
+
+    /**
+     * Closes and nulls the vision ONNX session under [inferenceMutex].
+     * The next [embedImage] call will reload it transparently.
+     */
+    suspend fun releaseVisionSession() {
+        inferenceMutex.withLock {
+            val session = synchronized(this@EmbeddingEngine) {
+                val s = visionSession
+                visionSession = null
+                s
+            }
+            if (session != null) {
+                try {
+                    session.close()
+                } catch (_: Throwable) {}
+                logSessionEvent("Released vision session")
+            }
+        }
+    }
+
+    /**
+     * Closes all active ONNX sessions and drops the tokenizer to release memory after idle timeout.
+     * Keeps the [ortEnv] singleton intact.
+     * Must be called under [inferenceMutex].
+     */
+    private fun releaseIdleResources() {
+        var releasedText = false
+        var releasedVision = false
+        var droppedTokenizer = false
+
+        val sessionsToClose = synchronized(this@EmbeddingEngine) {
+            val ts = textSession
+            textSession = null
+            if (ts != null) releasedText = true
+
+            val vs = visionSession
+            visionSession = null
+            if (vs != null) releasedVision = true
+
+            if (tokenizer != null) {
+                tokenizer = null
+                // The default provider caches the tokenizer in a singleton; drop that too so it can be collected.
+                GemmaTokenizer.resetInstance()
+                droppedTokenizer = true
+            }
+
+            listOfNotNull(ts, vs)
+        }
+
+        for (s in sessionsToClose) {
+            try {
+                s.close()
+            } catch (_: Throwable) {}
+        }
+
+        if (releasedText || releasedVision || droppedTokenizer) {
+            val details = buildList {
+                if (releasedText) add("text")
+                if (releasedVision) add("vision")
+                if (droppedTokenizer) add("tokenizer")
+            }.joinToString(", ")
+            logSessionEvent("Idle release after ${idleReleaseMs}ms: released $details")
         }
     }
 
@@ -232,69 +369,75 @@ class EmbeddingEngine(
         val tok = getTokenizer()
         val tokenIds = tok.encode(fullQuery, addSpecial = true)
 
-        val (env, textSess, _) = getSessions()
-
         return inferenceMutex.withLock {
-            withContext(Dispatchers.Default) {
-                val tensorsToClose = ArrayList<OnnxTensor>(5)
-                try {
-                    val inputIdsLong = LongArray(tokenIds.size) { tokenIds[it].toLong() }
-                    val attentionMaskLong = LongArray(tokenIds.size) { 1L }
+            ensureModelReady()
+            idleTimer.reset()
+            try {
+                val (env, textSess) = getTextSession()
 
-                    val inputIdsTensor = OnnxTensor.createTensor(
-                        env,
-                        LongBuffer.wrap(inputIdsLong),
-                        longArrayOf(1, inputIdsLong.size.toLong())
-                    ).also { tensorsToClose.add(it) }
+                withContext(Dispatchers.Default) {
+                    val tensorsToClose = ArrayList<OnnxTensor>(5)
+                    try {
+                        val inputIdsLong = LongArray(tokenIds.size) { tokenIds[it].toLong() }
+                        val attentionMaskLong = LongArray(tokenIds.size) { 1L }
 
-                    val attentionMaskTensor = OnnxTensor.createTensor(
-                        env,
-                        LongBuffer.wrap(attentionMaskLong),
-                        longArrayOf(1, attentionMaskLong.size.toLong())
-                    ).also { tensorsToClose.add(it) }
+                        val inputIdsTensor = OnnxTensor.createTensor(
+                            env,
+                            LongBuffer.wrap(inputIdsLong),
+                            longArrayOf(1, inputIdsLong.size.toLong())
+                        ).also { tensorsToClose.add(it) }
 
-                    val emptyImageFeatures = OnnxTensor.createTensor(
-                        env,
-                        FloatBuffer.allocate(0),
-                        longArrayOf(0, 512)
-                    ).also { tensorsToClose.add(it) }
+                        val attentionMaskTensor = OnnxTensor.createTensor(
+                            env,
+                            LongBuffer.wrap(attentionMaskLong),
+                            longArrayOf(1, attentionMaskLong.size.toLong())
+                        ).also { tensorsToClose.add(it) }
 
-                    val emptyVideoFeatures = OnnxTensor.createTensor(
-                        env,
-                        FloatBuffer.allocate(0),
-                        longArrayOf(0, 512)
-                    ).also { tensorsToClose.add(it) }
+                        val emptyImageFeatures = OnnxTensor.createTensor(
+                            env,
+                            FloatBuffer.allocate(0),
+                            longArrayOf(0, 512)
+                        ).also { tensorsToClose.add(it) }
 
-                    val emptyAudioFeatures = OnnxTensor.createTensor(
-                        env,
-                        FloatBuffer.allocate(0),
-                        longArrayOf(0, 512)
-                    ).also { tensorsToClose.add(it) }
+                        val emptyVideoFeatures = OnnxTensor.createTensor(
+                            env,
+                            FloatBuffer.allocate(0),
+                            longArrayOf(0, 512)
+                        ).also { tensorsToClose.add(it) }
 
-                    val inputs = mapOf(
-                        "input_ids" to inputIdsTensor,
-                        "attention_mask" to attentionMaskTensor,
-                        "image_features" to emptyImageFeatures,
-                        "video_features" to emptyVideoFeatures,
-                        "audio_features" to emptyAudioFeatures
-                    )
+                        val emptyAudioFeatures = OnnxTensor.createTensor(
+                            env,
+                            FloatBuffer.allocate(0),
+                            longArrayOf(0, 512)
+                        ).also { tensorsToClose.add(it) }
 
-                    textSess.run(inputs).use { result ->
-                        val opt = result.get("sentence_embedding")
-                        val outTensor = if (opt.isPresent) opt.get() as OnnxTensor else result.get(0) as OnnxTensor
-                        val fb = outTensor.floatBuffer.duplicate()
-                        fb.rewind()
-                        val fullEmbedding = FloatArray(fb.remaining())
-                        fb.get(fullEmbedding)
-                        truncateAndNormalize(fullEmbedding, EMBEDDING_DIM)
-                    }
-                } finally {
-                    for (tensor in tensorsToClose) {
-                        try {
-                            tensor.close()
-                        } catch (_: Throwable) {}
+                        val inputs = mapOf(
+                            "input_ids" to inputIdsTensor,
+                            "attention_mask" to attentionMaskTensor,
+                            "image_features" to emptyImageFeatures,
+                            "video_features" to emptyVideoFeatures,
+                            "audio_features" to emptyAudioFeatures
+                        )
+
+                        textSess.run(inputs).use { result ->
+                            val opt = result.get("sentence_embedding")
+                            val outTensor = if (opt.isPresent) opt.get() as OnnxTensor else result.get(0) as OnnxTensor
+                            val fb = outTensor.floatBuffer.duplicate()
+                            fb.rewind()
+                            val fullEmbedding = FloatArray(fb.remaining())
+                            fb.get(fullEmbedding)
+                            truncateAndNormalize(fullEmbedding, EMBEDDING_DIM)
+                        }
+                    } finally {
+                        for (tensor in tensorsToClose) {
+                            try {
+                                tensor.close()
+                            } catch (_: Throwable) {}
+                        }
                     }
                 }
+            } finally {
+                idleTimer.reset()
             }
         }
     }
@@ -315,110 +458,118 @@ class EmbeddingEngine(
         }
         ensureModelReady()
         val patchBatch = ImagePatchifier.processBitmap(bitmap, maxSoftTokens) ?: return null
-        val (env, textSess, visionSess) = getSessions()
 
         return inferenceMutex.withLock {
-            withContext(Dispatchers.Default) {
-                val imageFeaturesFloats: FloatArray
+            ensureModelReady()
+            idleTimer.reset()
+            try {
+                val (env, textSess) = getTextSession()
+                val (_, visionSess) = getVisionSession()
 
-                // Step 1: Run vision encoder graph
-                val visionTensors = ArrayList<OnnxTensor>(2)
-                try {
-                    val pixelValuesTensor = OnnxTensor.createTensor(
-                        env,
-                        FloatBuffer.wrap(patchBatch.pixelValues),
-                        longArrayOf(1, patchBatch.numPatches.toLong(), 768)
-                    ).also { visionTensors.add(it) }
+                withContext(Dispatchers.Default) {
+                    val imageFeaturesFloats: FloatArray
 
-                    val positionsTensor = OnnxTensor.createTensor(
-                        env,
-                        LongBuffer.wrap(patchBatch.positions),
-                        longArrayOf(1, patchBatch.numPatches.toLong(), 2)
-                    ).also { visionTensors.add(it) }
+                    // Step 1: Run vision encoder graph
+                    val visionTensors = ArrayList<OnnxTensor>(2)
+                    try {
+                        val pixelValuesTensor = OnnxTensor.createTensor(
+                            env,
+                            FloatBuffer.wrap(patchBatch.pixelValues),
+                            longArrayOf(1, patchBatch.numPatches.toLong(), 768)
+                        ).also { visionTensors.add(it) }
 
-                    val visionInputs = mapOf(
-                        "pixel_values" to pixelValuesTensor,
-                        "pixel_position_ids" to positionsTensor
-                    )
+                        val positionsTensor = OnnxTensor.createTensor(
+                            env,
+                            LongBuffer.wrap(patchBatch.positions),
+                            longArrayOf(1, patchBatch.numPatches.toLong(), 2)
+                        ).also { visionTensors.add(it) }
 
-                    visionSess.run(visionInputs).use { visionResult ->
-                        val opt = visionResult.get("image_features")
-                        val featTensor = if (opt.isPresent) opt.get() as OnnxTensor else visionResult.get(0) as OnnxTensor
-                        val fb = featTensor.floatBuffer.duplicate()
-                        fb.rewind()
-                        val expectedCount = patchBatch.softTokens * 512
-                        val floats = FloatArray(if (fb.remaining() >= expectedCount) expectedCount else fb.remaining())
-                        fb.get(floats)
-                        imageFeaturesFloats = floats
+                        val visionInputs = mapOf(
+                            "pixel_values" to pixelValuesTensor,
+                            "pixel_position_ids" to positionsTensor
+                        )
+
+                        visionSess.run(visionInputs).use { visionResult ->
+                            val opt = visionResult.get("image_features")
+                            val featTensor = if (opt.isPresent) opt.get() as OnnxTensor else visionResult.get(0) as OnnxTensor
+                            val fb = featTensor.floatBuffer.duplicate()
+                            fb.rewind()
+                            val expectedCount = patchBatch.softTokens * 512
+                            val floats = FloatArray(if (fb.remaining() >= expectedCount) expectedCount else fb.remaining())
+                            fb.get(floats)
+                            imageFeaturesFloats = floats
+                        }
+                    } finally {
+                        for (t in visionTensors) {
+                            try {
+                                t.close()
+                            } catch (_: Throwable) {}
+                        }
                     }
-                } finally {
-                    for (t in visionTensors) {
-                        try {
-                            t.close()
-                        } catch (_: Throwable) {}
+
+                    // Step 2: Run fusion / text model with visual tokens
+                    val fusionTensors = ArrayList<OnnxTensor>(5)
+                    try {
+                        val inputIds = buildImageInputIds(patchBatch.softTokens)
+                        val attentionMask = LongArray(inputIds.size) { 1L }
+
+                        val inputIdsTensor = OnnxTensor.createTensor(
+                            env,
+                            LongBuffer.wrap(inputIds),
+                            longArrayOf(1, inputIds.size.toLong())
+                        ).also { fusionTensors.add(it) }
+
+                        val attentionMaskTensor = OnnxTensor.createTensor(
+                            env,
+                            LongBuffer.wrap(attentionMask),
+                            longArrayOf(1, attentionMask.size.toLong())
+                        ).also { fusionTensors.add(it) }
+
+                        val imgTensor = OnnxTensor.createTensor(
+                            env,
+                            FloatBuffer.wrap(imageFeaturesFloats),
+                            longArrayOf(patchBatch.softTokens.toLong(), 512)
+                        ).also { fusionTensors.add(it) }
+
+                        val emptyVideoFeatures = OnnxTensor.createTensor(
+                            env,
+                            FloatBuffer.allocate(0),
+                            longArrayOf(0, 512)
+                        ).also { fusionTensors.add(it) }
+
+                        val emptyAudioFeatures = OnnxTensor.createTensor(
+                            env,
+                            FloatBuffer.allocate(0),
+                            longArrayOf(0, 512)
+                        ).also { fusionTensors.add(it) }
+
+                        val inputs = mapOf(
+                            "input_ids" to inputIdsTensor,
+                            "attention_mask" to attentionMaskTensor,
+                            "image_features" to imgTensor,
+                            "video_features" to emptyVideoFeatures,
+                            "audio_features" to emptyAudioFeatures
+                        )
+
+                        textSess.run(inputs).use { result ->
+                            val opt = result.get("sentence_embedding")
+                            val outTensor = if (opt.isPresent) opt.get() as OnnxTensor else result.get(0) as OnnxTensor
+                            val fb = outTensor.floatBuffer.duplicate()
+                            fb.rewind()
+                            val fullEmbedding = FloatArray(fb.remaining())
+                            fb.get(fullEmbedding)
+                            truncateAndNormalize(fullEmbedding, EMBEDDING_DIM)
+                        }
+                    } finally {
+                        for (t in fusionTensors) {
+                            try {
+                                t.close()
+                            } catch (_: Throwable) {}
+                        }
                     }
                 }
-
-                // Step 2: Run fusion / text model with visual tokens
-                val fusionTensors = ArrayList<OnnxTensor>(5)
-                try {
-                    val inputIds = buildImageInputIds(patchBatch.softTokens)
-                    val attentionMask = LongArray(inputIds.size) { 1L }
-
-                    val inputIdsTensor = OnnxTensor.createTensor(
-                        env,
-                        LongBuffer.wrap(inputIds),
-                        longArrayOf(1, inputIds.size.toLong())
-                    ).also { fusionTensors.add(it) }
-
-                    val attentionMaskTensor = OnnxTensor.createTensor(
-                        env,
-                        LongBuffer.wrap(attentionMask),
-                        longArrayOf(1, attentionMask.size.toLong())
-                    ).also { fusionTensors.add(it) }
-
-                    val imgTensor = OnnxTensor.createTensor(
-                        env,
-                        FloatBuffer.wrap(imageFeaturesFloats),
-                        longArrayOf(patchBatch.softTokens.toLong(), 512)
-                    ).also { fusionTensors.add(it) }
-
-                    val emptyVideoFeatures = OnnxTensor.createTensor(
-                        env,
-                        FloatBuffer.allocate(0),
-                        longArrayOf(0, 512)
-                    ).also { fusionTensors.add(it) }
-
-                    val emptyAudioFeatures = OnnxTensor.createTensor(
-                        env,
-                        FloatBuffer.allocate(0),
-                        longArrayOf(0, 512)
-                    ).also { fusionTensors.add(it) }
-
-                    val inputs = mapOf(
-                        "input_ids" to inputIdsTensor,
-                        "attention_mask" to attentionMaskTensor,
-                        "image_features" to imgTensor,
-                        "video_features" to emptyVideoFeatures,
-                        "audio_features" to emptyAudioFeatures
-                    )
-
-                    textSess.run(inputs).use { result ->
-                        val opt = result.get("sentence_embedding")
-                        val outTensor = if (opt.isPresent) opt.get() as OnnxTensor else result.get(0) as OnnxTensor
-                        val fb = outTensor.floatBuffer.duplicate()
-                        fb.rewind()
-                        val fullEmbedding = FloatArray(fb.remaining())
-                        fb.get(fullEmbedding)
-                        truncateAndNormalize(fullEmbedding, EMBEDDING_DIM)
-                    }
-                } finally {
-                    for (t in fusionTensors) {
-                        try {
-                            t.close()
-                        } catch (_: Throwable) {}
-                    }
-                }
+            } finally {
+                idleTimer.reset()
             }
         }
     }
@@ -456,25 +607,104 @@ class EmbeddingEngine(
     }
 
     /**
-     * Closes native OrtSession and OrtEnvironment resources.
+     * Closes native OrtSession and OrtEnvironment resources and cancels background jobs.
      */
     override fun close() {
         isClosed = true
-        try {
-            textSession?.close()
-        } catch (_: Throwable) {}
-        textSession = null
+        idleTimer.cancel()
+        engineScope.cancel()
+
+        var releasedText = false
+        var releasedVision = false
+
+        val (ts, vs, env) = synchronized(this@EmbeddingEngine) {
+            val t = textSession
+            textSession = null
+            if (t != null) releasedText = true
+
+            val v = visionSession
+            visionSession = null
+            if (v != null) releasedVision = true
+
+            val e = ortEnv
+            ortEnv = null
+
+            tokenizer = null
+
+            Triple(t, v, e)
+        }
 
         try {
-            visionSession?.close()
+            ts?.close()
         } catch (_: Throwable) {}
-        visionSession = null
-
         try {
-            ortEnv?.close()
+            vs?.close()
         } catch (_: Throwable) {}
-        ortEnv = null
+        try {
+            env?.close()
+        } catch (_: Throwable) {}
 
-        tokenizer = null
+        if (releasedText || releasedVision) {
+            val details = buildList {
+                if (releasedText) add("text")
+                if (releasedVision) add("vision")
+            }.joinToString(", ")
+            logSessionEvent("Closed engine: released $details")
+        }
+    }
+}
+
+/**
+ * Coordinates idle timeout release for [EmbeddingEngine] sessions.
+ *
+ * Restarts a delay timer on activity; when the timeout expires without activity,
+ * acquires [mutex] and invokes [onRelease]. If an inference is actively holding [mutex],
+ * the release waits or cancels if new activity occurs before the lock is acquired.
+ */
+internal class IdleReleaseTimer(
+    val timeoutMs: Long,
+    private val scope: CoroutineScope,
+    private val mutex: Mutex,
+    private val onRelease: suspend () -> Unit
+) {
+    private val lock = Any()
+    private var job: Job? = null
+
+    /**
+     * Cancels any pending release job and schedules a new one to run after [timeoutMs].
+     */
+    fun reset() {
+        synchronized(lock) {
+            job?.cancel()
+            job = scope.launch {
+                delay(timeoutMs)
+                mutex.withLock {
+                    try {
+                        onRelease()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Throwable) {}
+                }
+            }
+        }
+    }
+
+    /**
+     * Cancels any pending release job.
+     */
+    fun cancel() {
+        synchronized(lock) {
+            job?.cancel()
+            job = null
+        }
+    }
+
+    /**
+     * Returns true if there is an active scheduled release job pending.
+     */
+    internal fun hasActiveJob(): Boolean {
+        synchronized(lock) {
+            return job?.isActive == true
+        }
     }
 }

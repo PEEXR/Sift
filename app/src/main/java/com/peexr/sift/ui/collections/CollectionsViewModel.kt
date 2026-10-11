@@ -31,7 +31,7 @@ data class CollectionsUiState(
 
 
 class CollectionsViewModel(
-    private val repository: ScreenshotRepository
+    val repository: ScreenshotRepository
 ) : ViewModel() {
 
     private val _statusMessage = MutableStateFlow<String?>(null)
@@ -50,7 +50,12 @@ class CollectionsViewModel(
         initialValue = CollectionsUiState()
     )
 
-    fun createCollection(name: String, description: String) {
+    fun createCollectionWithExamples(
+        name: String,
+        description: String,
+        exampleIds: List<Long>,
+        onCreated: (collectionId: String) -> Unit = {}
+    ) {
         val trimmedName = name.trim()
         if (trimmedName.isBlank()) return
 
@@ -60,11 +65,18 @@ class CollectionsViewModel(
 
         viewModelScope.launch {
             try {
-                repository.createCollection(
+                val collectionId = repository.createCollection(
                     name = trimmedName,
                     description = finalDescription,
                     colorHex = colorHex
                 )
+                for (id in exampleIds) {
+                    repository.addToCollection(id, collectionId)
+                }
+                if (exampleIds.isNotEmpty()) {
+                    repository.refreshAutoCollections(onlyCollectionId = collectionId)
+                }
+                onCreated(collectionId)
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
@@ -72,6 +84,10 @@ class CollectionsViewModel(
                 _statusMessage.value = "Failed to create collection"
             }
         }
+    }
+
+    fun createCollection(name: String, description: String) {
+        createCollectionWithExamples(name, description, emptyList())
     }
 
     fun deleteCollection(id: String) {
