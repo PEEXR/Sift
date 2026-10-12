@@ -19,3 +19,6 @@ local.properties
 *.keystore
 keystore.properties
 CLAUDE.md
+
+# Local secrets
+.venv

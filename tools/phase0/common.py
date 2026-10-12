@@ -52,3 +52,12 @@ BACKGROUND_DESCRIPTIONS = [
 QUERY_PREFIX = "task: search result | query: "
 
 EMBEDDING_DIM = 128
+
+# Candidate tags for junk-review groups (contract across vision and text models).
+JUNK_TAGS = {
+    "code": "Shows a one-time password, verification code or login code (e.g. an SMS or app screen with a 4–8 digit code).",
+    "status": "A transactional status update: order placed/shipped/out for delivery/delivered, payment successful/failed, refund, booking or reservation confirmed, bill or recharge done.",
+    "time_bound": "Only useful until a specific date or time: a ticket, boarding pass, event, appointment, booking, coupon/offer with an end date, or deadline.",
+    "accidental": "Probably captured by accident or holds nothing worth keeping: mostly blank or loading screen, home screen or launcher, lock screen, notification shade or keyboard covering the content, an error dialog, a half-loaded page.",
+}
+
