@@ -22,3 +22,6 @@ CLAUDE.md
 
 # Local secrets
 .venv
+
+tools/phase0/llamacpp/
+comparisons.md
