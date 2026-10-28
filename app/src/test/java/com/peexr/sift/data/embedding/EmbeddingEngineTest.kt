@@ -201,12 +201,14 @@ class EmbeddingEngineTest {
     @Test
     fun idleReleaseTimer_firesAfterTimeout() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val mutex = Mutex()
+        val textMutex = Mutex()
+        val visionMutex = Mutex()
         val releaseCount = AtomicInteger(0)
         val timer = IdleReleaseTimer(
             timeoutMs = 50L,
             scope = scope,
-            mutex = mutex,
+            textMutex = textMutex,
+            visionMutex = visionMutex,
             onRelease = { releaseCount.incrementAndGet() }
         )
 
@@ -224,12 +226,14 @@ class EmbeddingEngineTest {
     @Test
     fun idleReleaseTimer_resetByActivity_delaysRelease() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val mutex = Mutex()
+        val textMutex = Mutex()
+        val visionMutex = Mutex()
         val releaseCount = AtomicInteger(0)
         val timer = IdleReleaseTimer(
             timeoutMs = 80L,
             scope = scope,
-            mutex = mutex,
+            textMutex = textMutex,
+            visionMutex = visionMutex,
             onRelease = { releaseCount.incrementAndGet() }
         )
 
@@ -254,28 +258,30 @@ class EmbeddingEngineTest {
     @Test
     fun idleReleaseTimer_neverFiresDuringActiveInference() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val mutex = Mutex()
+        val textMutex = Mutex()
+        val visionMutex = Mutex()
         val releaseCount = AtomicInteger(0)
         val timer = IdleReleaseTimer(
             timeoutMs = 50L,
             scope = scope,
-            mutex = mutex,
+            textMutex = textMutex,
+            visionMutex = visionMutex,
             onRelease = { releaseCount.incrementAndGet() }
         )
 
         try {
-            // Simulate an active inference holding the mutex
-            mutex.lock()
+            // Simulate an active inference holding the textMutex
+            textMutex.lock()
             timer.reset()
 
             // Wait past the timeout
             delay(100L)
-            // Mutex is held by the simulated inference, so onRelease must not have executed
+            // textMutex is held by the simulated inference, so onRelease must not have executed
             assertEquals(0, releaseCount.get())
 
-            // Inference finishes, resets timer and unlocks mutex
+            // Inference finishes, resets timer and unlocks textMutex
             timer.reset()
-            mutex.unlock()
+            textMutex.unlock()
 
             // Immediately after unlocking, onRelease should not execute because timer was reset
             assertEquals(0, releaseCount.get())
@@ -284,8 +290,8 @@ class EmbeddingEngineTest {
             delay(90L)
             assertEquals(1, releaseCount.get())
         } finally {
-            if (mutex.isLocked) {
-                mutex.unlock()
+            if (textMutex.isLocked) {
+                textMutex.unlock()
             }
             timer.cancel()
             scope.cancel()
@@ -295,12 +301,14 @@ class EmbeddingEngineTest {
     @Test
     fun idleReleaseTimer_cancel_preventsRelease() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val mutex = Mutex()
+        val textMutex = Mutex()
+        val visionMutex = Mutex()
         val releaseCount = AtomicInteger(0)
         val timer = IdleReleaseTimer(
             timeoutMs = 50L,
             scope = scope,
-            mutex = mutex,
+            textMutex = textMutex,
+            visionMutex = visionMutex,
             onRelease = { releaseCount.incrementAndGet() }
         )
 

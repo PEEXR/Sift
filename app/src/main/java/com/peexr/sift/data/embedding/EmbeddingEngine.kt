@@ -64,7 +64,10 @@ fun buildImageInputIds(softTokens: Int): LongArray {
  * Embedding engine powering EmbeddingGemma 2 (ONNX) local multimodal inference.
  *
  * Runs CPU-bound graph inference on [Dispatchers.Default] and model/file loading on [Dispatchers.IO].
- * All sessions are lazily initialized once and protected against concurrent execution via [Mutex].
+ * All sessions are lazily initialized once and protected against concurrent execution via split
+ * mutexes: [textMutex] guards the text/fusion ONNX session and [visionMutex] guards the vision
+ * encoder session. This decoupling allows [embedText] (search queries) to proceed without
+ * waiting for a long-running [embedImage] (background indexing) vision encode step.
  */
 class EmbeddingEngine(
     private val context: Context,
@@ -101,7 +104,8 @@ class EmbeddingEngine(
         const val IMAGE_END_ID = 258882L
     }
 
-    private val inferenceMutex = Mutex()
+    private val textMutex = Mutex()
+    private val visionMutex = Mutex()
     private val tokenizerMutex = Mutex()
 
     @Volatile
@@ -122,7 +126,8 @@ class EmbeddingEngine(
     private val idleTimer = IdleReleaseTimer(
         timeoutMs = idleReleaseMs,
         scope = engineScope,
-        mutex = inferenceMutex,
+        textMutex = textMutex,
+        visionMutex = visionMutex,
         onRelease = {
             if (!isClosed) {
                 releaseIdleResources()
@@ -291,11 +296,11 @@ class EmbeddingEngine(
     }
 
     /**
-     * Closes and nulls the vision ONNX session under [inferenceMutex].
+     * Closes and nulls the vision ONNX session under [visionMutex].
      * The next [embedImage] call will reload it transparently.
      */
     suspend fun releaseVisionSession() {
-        inferenceMutex.withLock {
+        visionMutex.withLock {
             val session = synchronized(this@EmbeddingEngine) {
                 val s = visionSession
                 visionSession = null
@@ -313,7 +318,7 @@ class EmbeddingEngine(
     /**
      * Closes all active ONNX sessions and drops the tokenizer to release memory after idle timeout.
      * Keeps the [ortEnv] singleton intact.
-     * Must be called under [inferenceMutex].
+     * Must be called under both [textMutex] and [visionMutex].
      */
     private fun releaseIdleResources() {
         var releasedText = false
@@ -369,7 +374,7 @@ class EmbeddingEngine(
         val tok = getTokenizer()
         val tokenIds = tok.encode(fullQuery, addSpecial = true)
 
-        return inferenceMutex.withLock {
+        return textMutex.withLock {
             ensureModelReady()
             idleTimer.reset()
             try {
@@ -459,17 +464,18 @@ class EmbeddingEngine(
         ensureModelReady()
         val patchBatch = ImagePatchifier.processBitmap(bitmap, maxSoftTokens) ?: return null
 
-        return inferenceMutex.withLock {
-            ensureModelReady()
-            idleTimer.reset()
-            try {
-                val (env, textSess) = getTextSession()
+        ensureModelReady()
+        idleTimer.reset()
+        try {
+            val env = getOrCreateEnv()
+
+            // Step 1: Run vision encoder graph under visionMutex only.
+            // This is the slow step (2.8-11s per image). Holding only the vision lock
+            // allows embedText() to proceed concurrently under textMutex.
+            val imageFeaturesFloats: FloatArray = visionMutex.withLock {
+                ensureModelReady()
                 val (_, visionSess) = getVisionSession()
-
                 withContext(Dispatchers.Default) {
-                    val imageFeaturesFloats: FloatArray
-
-                    // Step 1: Run vision encoder graph
                     val visionTensors = ArrayList<OnnxTensor>(2)
                     try {
                         val pixelValuesTensor = OnnxTensor.createTensor(
@@ -497,7 +503,7 @@ class EmbeddingEngine(
                             val expectedCount = patchBatch.softTokens * 512
                             val floats = FloatArray(if (fb.remaining() >= expectedCount) expectedCount else fb.remaining())
                             fb.get(floats)
-                            imageFeaturesFloats = floats
+                            floats
                         }
                     } finally {
                         for (t in visionTensors) {
@@ -506,8 +512,15 @@ class EmbeddingEngine(
                             } catch (_: Throwable) {}
                         }
                     }
+                }
+            }
 
-                    // Step 2: Run fusion / text model with visual tokens
+            // Step 2: Run fusion / text model with visual tokens under textMutex.
+            // visionMutex is now released - search queries can interleave between images.
+            return textMutex.withLock {
+                ensureModelReady()
+                val (_, textSess) = getTextSession()
+                withContext(Dispatchers.Default) {
                     val fusionTensors = ArrayList<OnnxTensor>(5)
                     try {
                         val inputIds = buildImageInputIds(patchBatch.softTokens)
@@ -568,9 +581,9 @@ class EmbeddingEngine(
                         }
                     }
                 }
-            } finally {
-                idleTimer.reset()
             }
+        } finally {
+            idleTimer.reset()
         }
     }
 
@@ -658,13 +671,15 @@ class EmbeddingEngine(
  * Coordinates idle timeout release for [EmbeddingEngine] sessions.
  *
  * Restarts a delay timer on activity; when the timeout expires without activity,
- * acquires [mutex] and invokes [onRelease]. If an inference is actively holding [mutex],
- * the release waits or cancels if new activity occurs before the lock is acquired.
+ * acquires both [textMutex] and [visionMutex] (always in text-then-vision order to
+ * prevent deadlocks) and invokes [onRelease]. If an inference is actively holding either
+ * mutex, the release waits or cancels if new activity occurs before both locks are acquired.
  */
 internal class IdleReleaseTimer(
     val timeoutMs: Long,
     private val scope: CoroutineScope,
-    private val mutex: Mutex,
+    private val textMutex: Mutex,
+    private val visionMutex: Mutex,
     private val onRelease: suspend () -> Unit
 ) {
     private val lock = Any()
@@ -678,12 +693,15 @@ internal class IdleReleaseTimer(
             job?.cancel()
             job = scope.launch {
                 delay(timeoutMs)
-                mutex.withLock {
-                    try {
-                        onRelease()
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (_: Throwable) {}
+                // Acquire both locks in a fixed order (text then vision) to prevent deadlocks
+                textMutex.withLock {
+                    visionMutex.withLock {
+                        try {
+                            onRelease()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Throwable) {}
+                    }
                 }
             }
         }
