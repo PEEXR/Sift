@@ -111,12 +111,15 @@ fun OnboardingScreen(
     var currentStep by remember { mutableStateOf(OnboardingStep.WELCOME) }
 
     fun checkPhotosPermission(): Boolean {
-        val perm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            Manifest.permission.READ_MEDIA_IMAGES
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            // API 34+: accept either full access or user-selected partial access
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
         } else {
-            Manifest.permission.READ_EXTERNAL_STORAGE
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
         }
-        return ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
     }
 
     fun checkNotificationPermission(): Boolean {
@@ -164,12 +167,17 @@ fun OnboardingScreen(
             isPhotosPermanentlyDenied = false
             onPhotosGranted()
         } else {
-            val perm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                Manifest.permission.READ_MEDIA_IMAGES
+            // Check rationale for the primary permission to detect permanent denial
+            val rationalePerms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                listOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                listOf(Manifest.permission.READ_MEDIA_IMAGES)
             } else {
-                Manifest.permission.READ_EXTERNAL_STORAGE
+                listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
             }
-            val showRationale = activity?.shouldShowRequestPermissionRationale(perm) ?: false
+            val showRationale = rationalePerms.any { perm ->
+                activity?.shouldShowRequestPermissionRationale(perm) ?: false
+            }
             isPhotosPermanentlyDenied = !showRationale
         }
     }
@@ -288,7 +296,13 @@ fun OnboardingScreen(
                         isPhotosPermanentlyDenied = isPhotosPermanentlyDenied,
                         hasNotificationPermission = hasNotificationPermission,
                         onRequestPhotos = {
-                            val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                                // API 34+: request both so the system shows the partial-access picker
+                                arrayOf(
+                                    Manifest.permission.READ_MEDIA_IMAGES,
+                                    Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+                                )
+                            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                                 arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
                             } else {
                                 arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)

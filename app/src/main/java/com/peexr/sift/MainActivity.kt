@@ -127,32 +127,44 @@ class MainActivity : ComponentActivity() {
         window.attributes = window.attributes.also { it.preferredDisplayModeId = best.modeId }
     }
 
+
+    /**
+     * Returns true if the app has at least partial media access.
+     *
+     * On API 34+ (Android 14), users can select "Allow selected photos" which grants
+     * READ_MEDIA_VISUAL_USER_SELECTED but denies READ_MEDIA_IMAGES. Both are accepted
+     * here so the app does not incorrectly treat partial access as a total denial.
+     */
     private fun hasMediaPermission(): Boolean {
-        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            // API 34+: accept either full access or user-selected partial access
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
         } else {
-            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-        }
-        return permissions.all {
-            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
         }
     }
 
     private fun checkAndRequestPermissions() {
-        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (hasMediaPermission()) {
+            libraryViewModel.syncScreenshots()
+            return
+        }
+
+        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            // API 34+: request both so the system shows the partial-access picker
+            arrayOf(
+                Manifest.permission.READ_MEDIA_IMAGES,
+                Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+            )
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
         } else {
             arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
 
-        val needed = permissions.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-
-        if (needed.isEmpty()) {
-            libraryViewModel.syncScreenshots()
-        } else {
-            permissionLauncher.launch(needed.toTypedArray())
-        }
+        permissionLauncher.launch(permissions)
     }
 }
